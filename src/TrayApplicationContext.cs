@@ -30,7 +30,7 @@ namespace MediaTracker
 
             _trayIcon = new NotifyIcon()
             {
-                Icon = new Icon(typeof(TrayApplicationContext).Assembly.GetManifestResourceStream("MediaTracker.resources.icon.ico")!),
+                Icon = new Icon(typeof(TrayApplicationContext).Assembly.GetManifestResourceStream("MediaTracker.Resources.icon.ico")!),
                 ContextMenuStrip = _menu,
                 Text = "Media Tracker",
                 Visible = true
