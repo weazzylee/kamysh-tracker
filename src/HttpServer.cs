@@ -1,11 +1,10 @@
 using System;
 using System.Diagnostics;
+using System.Net;
+using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Hosting;
 
 namespace MediaTracker
 {
@@ -13,7 +12,8 @@ namespace MediaTracker
     {
         private readonly MediaMonitor _monitor;
         private readonly string _url;
-        private IHost? _host;
+        private HttpListener? _listener;
+        private CancellationTokenSource? _cts;
 
         public HttpServer(MediaMonitor monitor, string url)
         {
@@ -23,37 +23,70 @@ namespace MediaTracker
 
         public async Task StartAsync(CancellationToken token = default)
         {
-            var builder = WebApplication.CreateBuilder();
-            builder.WebHost.UseUrls(_url);
-            var app = builder.Build();
+            _cts = CancellationTokenSource.CreateLinkedTokenSource(token);
+            _listener = new HttpListener();
+            _listener.Prefixes.Add(_url + "/");
+            _listener.Start();
 
-            app.MapGet("/", () => _monitor.Current.ToEndpointString());
-            app.MapGet("/json", () => _monitor.Current);
+            while (!_cts.Token.IsCancellationRequested)
+            {
+                try
+                {
+                    var context = await _listener.GetContextAsync().WaitAsync(_cts.Token);
+                    _ = HandleRequestAsync(context);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"HttpServer error: {ex}");
+                }
+            }
+        }
 
-            _host = app;
+        private async Task HandleRequestAsync(HttpListenerContext context)
+        {
             try
             {
-                await app.StartAsync(token);
+                string responseString;
+                string contentType;
+                if (context.Request.Url?.AbsolutePath == "/json")
+                {
+                    responseString = JsonSerializer.Serialize(_monitor.Current);
+                    contentType = "application/json";
+                }
+                else
+                {
+                    responseString = _monitor.Current.ToEndpointString();
+                    contentType = "text/plain; charset=utf-8";
+                }
+                var buffer = Encoding.UTF8.GetBytes(responseString);
+                context.Response.ContentType = contentType;
+                context.Response.ContentLength64 = buffer.Length;
+                await context.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length);
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"HttpServer start failed: {ex}");
-                throw;
+                Debug.WriteLine($"HandleRequest error: {ex}");
+                context.Response.StatusCode = 500;
+            }
+            finally
+            {
+                context.Response.Close();
             }
         }
 
         public async Task StopAsync()
         {
-            if (_host != null)
+            _cts?.Cancel();
+            if (_listener != null)
             {
-                try
-                {
-                    await _host.StopAsync(TimeSpan.FromSeconds(2));
-                    _host.Dispose();
-                }
-                catch (Exception ex) { Debug.WriteLine($"HttpServer.StopAsync exception: {ex}"); }
-                _host = null;
+                _listener.Stop();
+                _listener.Close();
             }
+            await Task.CompletedTask;
         }
     }
 }

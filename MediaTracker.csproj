@@ -12,19 +12,23 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <PublishTrimmed>false</PublishTrimmed>
+    <PublishReadyToRun>false</PublishReadyToRun>
+    <InvariantGlobalization>true</InvariantGlobalization>
 
     <!-- Single-file EXE только для Release -->
     <PublishSingleFile Condition="'$(Configuration)' == 'Release'">true</PublishSingleFile>
-    <SelfContained Condition="'$(Configuration)' == 'Release'">true</SelfContained>
+    <SelfContained Condition="'$(Configuration)' == 'Release'">false</SelfContained>
     <IncludeAllContentForSelfExtract Condition="'$(Configuration)' == 'Release'">true</IncludeAllContentForSelfExtract>
-    <EnableCompressionInSingleFile Condition="'$(Configuration)' == 'Release'">true</EnableCompressionInSingleFile>
+    <EnableCompressionInSingleFile Condition="'$(Configuration)' == 'Release'">false</EnableCompressionInSingleFile>
     <DebugType Condition="'$(Configuration)' == 'Release'">none</DebugType>
     <ApplicationIcon>Resources\icon.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
     <EmbeddedResource Include="Resources\icon.ico" />
-    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <TrimmerRootAssembly Include="MediaTracker" />
+    <TrimmerRootDescriptors Include="$(ILLinkDescriptorsPath)\xml\winforms.ilxml" />
   </ItemGroup>
 
 </Project>
