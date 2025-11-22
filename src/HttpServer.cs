@@ -1,6 +1,8 @@
 using System;
 using System.Diagnostics;
+using System.IO;
 using System.Net;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -52,7 +54,35 @@ namespace MediaTracker
             {
                 string responseString;
                 string contentType;
-                if (context.Request.Url?.AbsolutePath == "/json")
+                if (context.Request.Url?.AbsolutePath == "/widget")
+                {
+                    string exePath = System.Diagnostics.Process.GetCurrentProcess().MainModule!.FileName;
+                    string exeDir = Path.GetDirectoryName(exePath)!;
+                    string dllDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)!;
+                    string? externalWidgetPath = File.Exists(Path.Combine(exeDir, "widget.html")) ? Path.Combine(exeDir, "widget.html") : (File.Exists(Path.Combine(dllDir, "widget.html")) ? Path.Combine(dllDir, "widget.html") : null);
+                    if (!string.IsNullOrEmpty(externalWidgetPath))
+                    {
+                        responseString = await File.ReadAllTextAsync(externalWidgetPath);
+                        contentType = "text/html; charset=utf-8";
+                    }
+                    else
+                    {
+                        using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("MediaTracker.Resources.widget.html");
+                        if (stream != null)
+                        {
+                            using var reader = new StreamReader(stream);
+                            responseString = await reader.ReadToEndAsync();
+                            contentType = "text/html; charset=utf-8";
+                        }
+                        else
+                        {
+                            responseString = "<html><body>Widget not found</body></html>";
+                            contentType = "text/html; charset=utf-8";
+                            context.Response.StatusCode = 404;
+                        }
+                    }
+                }
+                else if (context.Request.Url?.AbsolutePath == "/json")
                 {
                     responseString = JsonSerializer.Serialize(_monitor.Current);
                     contentType = "application/json";
@@ -62,6 +92,11 @@ namespace MediaTracker
                     responseString = _monitor.Current.ToEndpointString();
                     contentType = "text/plain; charset=utf-8";
                 }
+                // Add CORS headers for browser compatibility
+                context.Response.AddHeader("Access-Control-Allow-Origin", "*");
+                context.Response.AddHeader("Access-Control-Allow-Methods", "GET");
+                context.Response.AddHeader("Access-Control-Allow-Headers", "Content-Type");
+
                 var buffer = Encoding.UTF8.GetBytes(responseString);
                 context.Response.ContentType = contentType;
                 context.Response.ContentLength64 = buffer.Length;
