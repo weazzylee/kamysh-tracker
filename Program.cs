@@ -1,5 +1,4 @@
-// Program.cs
-// .NET 8, Windows-only app using WinForms tray + Kestrel HTTP + Windows SMTC (GlobalSystemMediaTransportControls).
+// .NET 8, Windows-only app using WinForms tray + WebApplication HTTP + Windows SMTC.
 
 using System;
 using System.Diagnostics;
@@ -19,8 +18,8 @@ namespace MediaTracker
 {
     static class Program
     {
-        private const string MutexName = "Global\\MediaTracker_SingleInstance_Mutex_v2";
-        private const string UrlPrefix = "http://localhost:5050";
+        private const string MutexName = "Global\\MediaTracker_SingleInstance_Mutex_v3";
+        private const string UrlPrefix = "http://127.0.0.1:5050";
 
         [STAThread]
         static void Main()
@@ -50,14 +49,11 @@ namespace MediaTracker
                 if (t.IsFaulted) Debug.WriteLine("HttpServer start failed: " + t.Exception);
             });
 
-            Application.Run(new TrayApplicationContext(mediaMonitor, () =>
+            Application.Run(new TrayApplicationContext(mediaMonitor, async () =>
             {
                 cts.Cancel();
-                Task.Run(async () =>
-                {
-                    try { await httpServer.StopAsync(); } catch { }
-                    try { await mediaMonitor.StopAsync(); } catch { }
-                }).Wait(TimeSpan.FromSeconds(2));
+                try { await httpServer.StopAsync(); } catch { }
+                try { await mediaMonitor.StopAsync(); } catch { }
             }));
         }
     }
@@ -83,11 +79,40 @@ namespace MediaTracker
 
     public class MediaMonitor : IDisposable
     {
+        // whitelist ключевых слов для музыкальных приложений (проверяем SourceAppUserModelId)
+        private static readonly string[] MusicAppKeywords =
+        [
+            "spotify",
+            "yandex",
+            "yandexmusic",
+            "yamusic",
+            "yandex.music"
+        ];
+
+        // blacklist ключевых слов для явно не-музыкальных источников (встречаются в title или id)
+        private static readonly string[] NonMusicKeywords =
+        [
+            "twitch",
+            "youtube",
+            "netflix",
+            "prime video",
+            "primevideo",
+            "mozilla",
+            "firefox",
+            "chrome",
+            "edge",
+            "vimeo",
+            "soundcloud", // soundcloud — может быть муз., но при желании убрать
+            "facebook",
+            "instagram"
+        ];
+
         private readonly object _lock = new();
         private GlobalSystemMediaTransportControlsSessionManager? _manager;
         private GlobalSystemMediaTransportControlsSession? _session;
         private CancellationTokenSource? _backgroundCts;
-        private CancellationTokenSource? _debounceCts;
+        private System.Threading.Timer? _debounceTimer;
+        private List<GlobalSystemMediaTransportControlsSession> _subscribedSessions = new();
 
         private MediaState _current = new();
         public MediaState Current
@@ -122,7 +147,7 @@ namespace MediaTracker
 
             try
             {
-                _debounceCts?.Cancel();
+                _debounceTimer?.Change(Timeout.Infinite, Timeout.Infinite);
                 _backgroundCts?.Cancel();
 
                 lock (_lock)
@@ -146,6 +171,18 @@ namespace MediaTracker
                         }
                         catch { }
                     }
+
+                    // Unsubscribe from all sessions
+                    foreach (var s in _subscribedSessions)
+                    {
+                        try
+                        {
+                            s.MediaPropertiesChanged -= Session_MediaPropertiesChanged;
+                            s.PlaybackInfoChanged -= Session_PlaybackInfoChanged;
+                        }
+                        catch { }
+                    }
+                    _subscribedSessions.Clear();
                 }
             }
             catch (Exception ex)
@@ -164,11 +201,8 @@ namespace MediaTracker
 
         private void ScheduleSessionUpdate()
         {
-            Task.Run(() =>
-            {
-                UpdateCurrentSession();
-                ScheduleRefresh();
-            });
+            UpdateCurrentSession();
+            ScheduleRefresh();
         }
 
         private void UpdateCurrentSession()
@@ -178,10 +212,28 @@ namespace MediaTracker
                 if (_manager == null) return;
                 var sessions = _manager.GetSessions().ToList();
 
-                // 1) Try current session first (Windows-provided)
+                // Unsubscribe from old sessions
+                foreach (var s in _subscribedSessions)
+                {
+                    try
+                    {
+                        s.MediaPropertiesChanged -= Session_MediaPropertiesChanged;
+                        s.PlaybackInfoChanged -= Session_PlaybackInfoChanged;
+                    }
+                    catch { }
+                }
+                _subscribedSessions.Clear();
+
+                // Subscribe to new sessions
+                _subscribedSessions.AddRange(sessions);
+                foreach (var s in sessions)
+                {
+                    s.MediaPropertiesChanged += Session_MediaPropertiesChanged;
+                    s.PlaybackInfoChanged += Session_PlaybackInfoChanged;
+                }
+
                 var pick = _manager.GetCurrentSession();
 
-                // 2) If current is non-priority, try to prefer spotify/yandex among sessions
                 if (pick != null)
                 {
                     string id = pick.SourceAppUserModelId ?? "";
@@ -237,30 +289,18 @@ namespace MediaTracker
         {
             lock (_lock)
             {
-                _debounceCts?.Cancel();
-                _debounceCts = new CancellationTokenSource();
-                var token = _debounceCts.Token;
-
-                _ = Task.Run(async () =>
+                _debounceTimer?.Change(Timeout.Infinite, Timeout.Infinite);
+                if (_debounceTimer == null)
                 {
-                    try
-                    {
-                        await Task.Delay(debounceMs, token);
-                        if (token.IsCancellationRequested) return;
-                        await RefreshNowPlayingAsync();
-                    }
-                    catch (TaskCanceledException) { }
-                    catch (Exception ex) { Debug.WriteLine($"ScheduleRefresh task error: {ex}"); }
-                }, token);
+                    _debounceTimer = new System.Threading.Timer(_ => _ = RefreshNowPlayingAsync(), null, debounceMs, Timeout.Infinite);
+                }
+                else
+                {
+                    _debounceTimer.Change(debounceMs, Timeout.Infinite);
+                }
             }
         }
 
-        /// <summary>
-        /// NEW: Scan all sessions and pick the best one:
-        ///  - prefer any session that is Playing (Spotify > Yandex > others)
-        ///  - if none playing: keep last known (for display) but IsPlaying=false so endpoint returns "Сейчас ничего не играет"
-        /// This avoids being stuck on a paused Spotify session while Yandex actually plays.
-        /// </summary>
         private async Task RefreshNowPlayingAsync()
         {
             try
@@ -272,90 +312,109 @@ namespace MediaTracker
                 }
 
                 var sessions = _manager.GetSessions().ToList();
-                if (sessions.Count == 0)
-                {
-                    PublishStateIfChanged(new MediaState());
-                    return;
-                }
+                if (!sessions.Any()) { PublishStateIfChanged(new MediaState()); return; }
 
-                // gather info for all sessions
-                var infos = new System.Collections.Generic.List<(GlobalSystemMediaTransportControlsSession session, string artist, string title, bool isPlaying, string id)>();
-
-                foreach (var s in sessions)
+                var tasks = sessions.Select(async s =>
                 {
                     try
                     {
-                        var props = await s.TryGetMediaPropertiesAsync();
+                        var propsTask = s.TryGetMediaPropertiesAsync().AsTask();
+                        var completed = await Task.WhenAny(propsTask, Task.Delay(800));
+                        if (completed != propsTask) return (s: s, artist: "", title: "", isPlaying: false, id: s.SourceAppUserModelId ?? "");
+                        var props = await propsTask;
                         var info = s.GetPlaybackInfo();
                         string artist = props?.Artist?.Trim() ?? "";
                         string title = props?.Title?.Trim() ?? "";
                         bool isPlaying = info?.PlaybackStatus == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing;
                         string id = s.SourceAppUserModelId ?? "";
-
-                        infos.Add((s, artist, title, isPlaying, id));
+                        return (s, artist, title, isPlaying, id);
                     }
-                    catch
-                    {
-                        // ignore problematic session
-                    }
-                }
+                    catch { return (s: s, artist: "", title: "", isPlaying: false, id: s.SourceAppUserModelId ?? ""); }
+                }).ToArray();
 
-                // pick any that is playing with priority Spotify > Yandex > any
-                var playingPick = infos
-                    .Where(x => x.isPlaying)
-                    .OrderBy(x =>
-                    {
-                        if (x.id.Contains("spotify", StringComparison.OrdinalIgnoreCase)) return 0;
-                        if (x.id.Contains("yandex", StringComparison.OrdinalIgnoreCase)) return 1;
-                        return 2;
-                    })
+                var infos = (await Task.WhenAll(tasks)).ToList();
+
+                // 1) Сначала — играющие сессии из whitelist (Spotify, Yandex)
+                var playingWhitelisted = infos
+                    .Where(x => x.isPlaying && ContainsAnyKeyword(x.id, MusicAppKeywords))
+                    .OrderBy(x => !ContainsAnyKeyword(x.id, MusicAppKeywords)) // сохраняем порядок (необязательно)
                     .FirstOrDefault();
 
-                if (playingPick.session != null)
+                if (playingWhitelisted.s != null)
                 {
-                    // some session is playing — use it
                     PublishStateIfChanged(new MediaState
                     {
-                        Artist = playingPick.artist,
-                        Title = playingPick.title,
+                        Artist = playingWhitelisted.artist,
+                        Title = playingWhitelisted.title,
                         IsPlaying = true,
-                        SourceApp = playingPick.id,
+                        SourceApp = playingWhitelisted.id,
                         Timestamp = DateTimeOffset.UtcNow
                     });
                     return;
                 }
 
-                // none playing — fall back to sensible last-known display
-                // prefer current session, then priority Spotify/Yandex, then first session
-                var currentSession = _manager.GetCurrentSession();
-                (GlobalSystemMediaTransportControlsSession session, string artist, string title, bool isPlaying, string id)? displayPick = null;
+                // 2) Если нет — ищем играющие сессии, которые выглядят как музыка:
+                //    - есть artist OR title выглядит не как страница (не содержит blacklist)
+                var playingLikelyMusic = infos
+                    .Where(x => x.isPlaying && ( !string.IsNullOrWhiteSpace(x.artist) || !ContainsAnyKeyword(x.title + x.id, NonMusicKeywords) ))
+                    .OrderBy(x => string.IsNullOrWhiteSpace(x.artist) ? 1 : 0) // предпочитаем с artist
+                    .FirstOrDefault();
 
-                if (currentSession != null)
+                if (playingLikelyMusic.s != null)
                 {
-                    var match = infos.FirstOrDefault(x => x.session == currentSession);
-                    if (match.session != null) displayPick = match;
+                    PublishStateIfChanged(new MediaState
+                    {
+                        Artist = playingLikelyMusic.artist,
+                        Title = playingLikelyMusic.title,
+                        IsPlaying = true,
+                        SourceApp = playingLikelyMusic.id,
+                        Timestamp = DateTimeOffset.UtcNow
+                    });
+                    return;
                 }
 
-                if (!displayPick.HasValue || displayPick.Value.session == null)
+                // 3) Если всё ещё ничего — (опционально) считать другие playing как fallback,
+                //    но фильтруем по blacklist (не показываем Twitch/YouTube если можно)
+                var playingOther = infos
+                    .Where(x => x.isPlaying && !ContainsAnyKeyword(x.title + x.id, NonMusicKeywords))
+                    .FirstOrDefault();
+
+                if (playingOther.s != null)
+                {
+                    PublishStateIfChanged(new MediaState
+                    {
+                        Artist = playingOther.artist,
+                        Title = playingOther.title,
+                        IsPlaying = true,
+                        SourceApp = playingOther.id,
+                        Timestamp = DateTimeOffset.UtcNow
+                    });
+                    return;
+                }
+
+                // 4) Ничего подходящего не играет — показываем лучший last-known (как раньше)
+                var currentSession = _manager.GetCurrentSession();
+                var displayPick = infos.FirstOrDefault(x => x.s == currentSession);
+                if (displayPick.s == null)
                 {
                     displayPick = infos
                         .OrderBy(x =>
                         {
-                            if (x.id.Contains("spotify", StringComparison.OrdinalIgnoreCase)) return 0;
-                            if (x.id.Contains("yandex", StringComparison.OrdinalIgnoreCase)) return 1;
+                            if (ContainsAnyKeyword(x.id, MusicAppKeywords)) return 0;
+                            if (!string.IsNullOrWhiteSpace(x.artist)) return 1;
                             return 2;
                         })
                         .FirstOrDefault();
                 }
 
-                if (displayPick.HasValue && displayPick.Value.session != null)
+                if (displayPick.s != null)
                 {
                     PublishStateIfChanged(new MediaState
                     {
-                        Artist = displayPick.Value.artist,
-                        Title = displayPick.Value.title,
+                        Artist = displayPick.artist,
+                        Title = displayPick.title,
                         IsPlaying = false,
-                        SourceApp = displayPick.Value.id,
+                        SourceApp = displayPick.id,
                         Timestamp = DateTimeOffset.UtcNow
                     });
                 }
@@ -394,11 +453,11 @@ namespace MediaTracker
 
         public async Task<bool> TogglePlayPauseAsync()
         {
-            GlobalSystemMediaTransportControlsSession? session;
-            lock (_lock) { session = _session; }
-
-            if (session == null)
-                return false;
+            var state = Current;
+            var sessions = _manager?.GetSessions() ?? Enumerable.Empty<GlobalSystemMediaTransportControlsSession>();
+            var session = sessions.FirstOrDefault(s => string.Equals(s.SourceAppUserModelId, state.SourceApp, StringComparison.OrdinalIgnoreCase))
+                          ?? _session;
+            if (session == null) return false;
 
             try
             {
@@ -420,9 +479,18 @@ namespace MediaTracker
 
         public void Dispose()
         {
-            try { _debounceCts?.Cancel(); } catch { }
+            try { _debounceTimer?.Change(Timeout.Infinite, Timeout.Infinite); } catch { }
             try { _backgroundCts?.Cancel(); } catch { }
             try { _ = StopAsync(); } catch { }
+        }
+
+        private static bool ContainsAnyKeyword(string text, string[] keywords)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return false;
+            foreach (var k in keywords)
+                if (text.IndexOf(k, StringComparison.OrdinalIgnoreCase) >= 0)
+                    return true;
+            return false;
         }
     }
 
@@ -440,42 +508,23 @@ namespace MediaTracker
 
         public async Task StartAsync(CancellationToken token = default)
         {
-            var builder = Host.CreateDefaultBuilder()
-                .ConfigureWebHostDefaults(webBuilder =>
-                {
-                    webBuilder.UseUrls(_url);
-                    webBuilder.Configure(app =>
-                    {
-                        app.UseRouting();
-                        app.UseEndpoints(endpoints =>
-                        {
-                            endpoints.MapGet("/", async context =>
-                            {
-                                var state = _monitor.Current;
-                                context.Response.ContentType = "text/plain; charset=utf-8";
-                                await context.Response.WriteAsync(state.ToEndpointString());
-                            });
+            var builder = WebApplication.CreateBuilder();
+            builder.WebHost.UseUrls(_url);
+            var app = builder.Build();
 
-                            endpoints.MapGet("/json", async context =>
-                            {
-                                var state = _monitor.Current;
-                                context.Response.ContentType = "application/json; charset=utf-8";
-                                var json = JsonSerializer.Serialize(new
-                                {
-                                    artist = state.Artist,
-                                    title = state.Title,
-                                    isPlaying = state.IsPlaying,
-                                    source = state.SourceApp,
-                                    timestamp = state.Timestamp
-                                });
-                                await context.Response.WriteAsync(json);
-                            });
-                        });
-                    });
-                });
+            app.MapGet("/", () => _monitor.Current.ToEndpointString());
+            app.MapGet("/json", () => _monitor.Current);
 
-            _host = builder.Build();
-            await _host.StartAsync(token);
+            _host = app;
+            try
+            {
+                await app.StartAsync(token);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"HttpServer start failed: {ex}");
+                throw;
+            }
         }
 
         public async Task StopAsync()
@@ -498,14 +547,14 @@ namespace MediaTracker
         private readonly NotifyIcon _trayIcon;
         private readonly ContextMenuStrip _menu;
         private readonly MediaMonitor _monitor;
-        private readonly Action _onExit;
+        private readonly Func<Task> _onExit;
         private SynchronizationContext? _uiContext;
         private DateTime _lastBalloon = DateTime.MinValue;
 
-        public TrayApplicationContext(MediaMonitor monitor, Action onExit)
+        public TrayApplicationContext(MediaMonitor monitor, Func<Task> onExit)
         {
             _monitor = monitor ?? throw new ArgumentNullException(nameof(monitor));
-            _onExit = onExit ?? (() => { });
+            _onExit = onExit ?? (() => Task.CompletedTask);
 
             _uiContext = SynchronizationContext.Current;
 
@@ -548,12 +597,7 @@ namespace MediaTracker
         }
 
         private void PlayPause_Click(object? sender, EventArgs e)
-        {
-            _ = _monitor.TogglePlayPauseAsync().ContinueWith(t =>
-            {
-                if (t.IsFaulted) Debug.WriteLine("PlayPause task failed: " + t.Exception);
-            });
-        }
+            => _ = _monitor.TogglePlayPauseAsync().ContinueWith(t => { if (t.IsFaulted) Debug.WriteLine("PlayPause task failed: " + t.Exception); });
 
         private void CopyNowPlaying_Click(object? sender, EventArgs e)
         {
@@ -570,11 +614,12 @@ namespace MediaTracker
             }
         }
 
-        private void Exit_Click(object? sender, EventArgs e)
+        private async void Exit_Click(object? sender, EventArgs e)
         {
-            try { _trayIcon.Visible = false; } catch { }
             _monitor.StateChanged -= OnMediaStateChanged;
-            _onExit?.Invoke();
+            _trayIcon.Visible = false;
+            _trayIcon.Dispose();
+            await _onExit();
             Application.Exit();
         }
 
