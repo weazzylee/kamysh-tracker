@@ -18,9 +18,11 @@
     <SelfContained Condition="'$(Configuration)' == 'Release'">true</SelfContained>
     <IncludeAllContentForSelfExtract Condition="'$(Configuration)' == 'Release'">true</IncludeAllContentForSelfExtract>
     <EnableCompressionInSingleFile Condition="'$(Configuration)' == 'Release'">true</EnableCompressionInSingleFile>
+    <ApplicationIcon>resources\icon.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="resources\icon.ico" />
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 
