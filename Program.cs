@@ -336,7 +336,7 @@ namespace MediaTracker
                     if (match.session != null) displayPick = match;
                 }
 
-                if (displayPick.session == null)
+                if (!displayPick.HasValue || displayPick.Value.session == null)
                 {
                     displayPick = infos
                         .OrderBy(x =>
@@ -348,14 +348,14 @@ namespace MediaTracker
                         .FirstOrDefault();
                 }
 
-                if (displayPick.session != null)
+                if (displayPick.HasValue && displayPick.Value.session != null)
                 {
                     PublishStateIfChanged(new MediaState
                     {
-                        Artist = displayPick.artist,
-                        Title = displayPick.title,
+                        Artist = displayPick.Value.artist,
+                        Title = displayPick.Value.title,
                         IsPlaying = false,
-                        SourceApp = displayPick.id,
+                        SourceApp = displayPick.Value.id,
                         Timestamp = DateTimeOffset.UtcNow
                     });
                 }
