@@ -43,7 +43,7 @@
 **Инструкция** находится в файле [install-as-command.md](docs/install-as-command.md)
 
 В **OBS** вы можете использовать эти эндпоинты для интеграции, например, для отображения текущей песни в стриме.
-**Инструкция** находится в файле [install-as-obs-widget.md](docs/install-as-obs-widget.md)
+**Инструкция** находится в файле [install-as-obs-widget.md](docs/install-as-obs-widget-browser.md)
 
 ## Лицензия
 
