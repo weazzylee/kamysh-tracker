@@ -23,6 +23,11 @@ namespace MediaTracker
             _uiContext = SynchronizationContext.Current;
 
             _menu = new ContextMenuStrip();
+            _menu.Items.Add(new ToolStripMenuItem("MediaTracker")
+            {
+                Enabled = false
+            });
+            _menu.Items.Add(new ToolStripSeparator());
             _menu.Items.Add(new ToolStripMenuItem("Pause/Play", null, PlayPause_Click));
             _menu.Items.Add(new ToolStripMenuItem("Copy now playing", null, CopyNowPlaying_Click));
             _menu.Items.Add(new ToolStripSeparator());
