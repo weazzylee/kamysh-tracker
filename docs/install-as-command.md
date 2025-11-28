@@ -1,42 +1,42 @@
-# Создание чат-команды !трек в Mix It Up для отображения текущего трека
+# Creating a !track Chat Command in Mix It Up to Display the Current Track
 
-## Предварительные требования
+## Prerequisites
 
-- MediaTracker установлен и запущен. Иструкция по установке описана в файле [README.md](../README.md#установка-собранного-исполняемого-файла)
-- Mix It Up подключен к вашему Twitch-каналу.
+- MediaTracker is installed and running. Installation instructions are in the file [README.md](../README.md#installation-of-the-pre-built-executable)
+- Mix It Up is connected to your Twitch channel.
 
-## Шаг 1: Создание чат-команды
+## Step 1: Creating a Chat Command
 
-1. В Mix It Up откройте раздел "Commands" (Команды) -> Custom commands (Кастомные команды).
-2. Нажмите "New Command"/"Новая команда" для создания новой команды.
-3. Настройте команду:
-   - **Name/Имя**: любое название
-   - **Chat trigger/Триггер**: трек
-3. Снизу **Action/Действие** -> Web Request/Веб запрос и нежимаем плюс
+1. In Mix It Up, open the "Commands" section -> Custom commands.
+2. Click "New Command" to create a new command.
+3. Configure the command:
+   - **Name**: any name
+   - **Chat trigger**: track
+4. Below **Action** -> Web Request and click the plus button.
 
-## Шаг 2: Получения песни (Web Request/Веб запрос)
+## Step 2: Getting the Song (Web Request)
 
 1. **Web Request URL**: http://127.0.0.1:5050
-3. Снизу **Action/Действие** -> Chat Message/Сообщение в чат и нежимаем плюс
+2. Below **Action** -> Chat Message and click the plus button.
 
-## Шаг 3: Добавление ответа в чат (Chat Message/Сообщение в чат)
+## Step 3: Adding Response to Chat (Chat Message)
 
-1. **Send as streamer/Отправить как стример**: ставим галочку
-1. **Chat message/Сообщение в чат**: `/announce Текущий трек: $webrequestresult`
+1. **Send as streamer**: check the box
+2. **Chat message**: `/announce Current track: $webrequestresult`
 
-## Шаг 4: Сохранение и тестирование
+## Step 4: Saving and Testing
 
-1. Нажмите **"Save/Сохранить"** для сохранения команды. (Иконка дискеты)
-2. Включите команду, если есть переключатель.
-3. Протестируйте: в чате Twitch введите `!трек`. Mix It Up должен ответить текущим треком в формате "Текущий трек: Artist - Title" или "Текущий трек: Сейчас ничего не играет".
+1. Click **"Save"** to save the command. (Floppy disk icon)
+2. Enable the command if there is a toggle.
+3. Test: in the Twitch chat enter `!track`. Mix It Up should respond with the current track in the format "Current track: Artist - Title" or "Current track: Nothing is playing right now".
 
-## Примечания
+## Notes
 
-- Команда будет работать только если MediaTracker запущен.
-- Если ответ не приходит, проверьте логи Mix It Up на ошибки (раздел "Logs").
-- Для более сложных команд вы можете добавить условия, например, проверку, играет ли что-то сейчас, используя JSON-эндпоинт (`http://127.0.0.1:5050/json`), но для простого текста достаточно GET /.
+- The command will only work if MediaTracker is running.
+- If no response comes, check the Mix It Up logs for errors (Logs section).
+- For more complex commands, you can add conditions, for example, checking if something is playing now, using the JSON endpoint (`http://127.0.0.1:5050/json`), but for simple text, GET / is sufficient.
 
-## Пример использования
+## Usage Example
 
-- Зритель пишет: `!трек`
-- Бот отвечает: `Текущий трек: The Beatles - Hey Jude`
+- Viewer writes: `!track`
+- Bot responds: `Current track: The Beatles - Hey Jude`

@@ -1,50 +1,60 @@
 # MediaTracker
 
-## Описание
+- **EN README** (You are here)
+- **[RU README](README.ru.md)**
 
-**MediaTracker** - это Windows-приложение на .NET 8, которое отслеживает текущую воспроизводимую медиа через System Media Transport Controls (SMTC). Приложение работает в системном трее и предоставляет HTTP API на порту 5050 для интеграции с внешними приложениями, такими как MixItUp.
+## Description
 
-### Отслеживаемые приложения
+**MediaTracker** is a Windows application built on .NET 8 that tracks currently playing media via System Media Transport Controls (SMTC). The application runs in the system tray and provides an HTTP API on port 5050 for integration with external applications, such as MixItUp.
 
-Приложение отслеживает медиа из любых приложений, поддерживающих SMTC, с приоритетом на музыкальные приложения, такие как Spotify и Yandex Music. Оно автоматически фильтрует не-музыкальные источники, включая браузеры (Chrome, Firefox, Edge), видео-платформы (YouTube, Twitch, Netflix, Prime Video), социальные сети (Facebook, Instagram) и другие, чтобы отображать только релевантную музыкальную информацию.
+### Tracked Applications
 
-## Системные требования
+The application tracks media from any application that supports SMTC, with a priority on music applications like Spotify and Yandex Music. It automatically filters out non-music sources, including browsers (Chrome, Firefox, Edge), video platforms (YouTube, Twitch, Netflix, Prime Video), social networks (Facebook, Instagram), and others, to display only relevant music information.
 
-- Операционная система: Windows 10/11 (версия 21H1 или новее)
-- [.NET 8 Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/8.0) (для запуска приложения; при сборке в Release режиме приложение является self-contained, но в данном проекте SelfContained=false для уменьшения размера исполняемого файла)
+## System Requirements
 
-## Установка собранного исполняемого файла
+- **Operating System**: Windows 10/11 (version 21H1 or newer)
+- **[.NET 8 Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/8.0)** - required to run the application (when built in Release mode, the application is self-contained, but in this project SelfContained=false to reduce the executable file size)
 
-1. Скачайте готовый исполняемый файл `MediaTracker.exe` из [релизов проекта](https://github.com/weazzylee/media-tracker/releases).
-2. Запустите `MediaTracker.exe`. Приложение запустится в системном трее (рядом с часами в панели задач).
-3. Убедитесь, что приложение работает: оно должно автоматически запустить HTTP-сервер на `http://127.0.0.1:5050`.
-4. Проверьте эндпоинт: откройте браузер и перейдите по адресу `http://127.0.0.1:5050/`. Вы должны увидеть текущий трек в формате "Artist - Title" или "Сейчас ничего не играет".
+## Installation of the Pre-built Executable
 
-## Сборка из исходников
+1. Download the ready-made executable file `MediaTracker.exe` from the [project releases](https://github.com/weazzylee/media-tracker/releases)
+2. Run `MediaTracker.exe` - the application will start in the system tray (near the clock in the taskbar)
+3. Ensure the application is running: it should automatically start an HTTP server at `http://127.0.0.1:5050`
+4. Check the endpoint: open a browser and navigate to `http://127.0.0.1:5050/` - you should see the current track in the format "Artist - Title" or "Nothing is playing right now"
 
-Для сборки из исходников требуется .NET 8 SDK.
+## Building from Source
 
-1. Клонируйте репозиторий.
-2. Перейдите в директорию проекта.
-3. Выполните команду:
-   ```
+Building from source requires the .NET 8 SDK.
+
+1. Clone the repository
+2. Navigate to the project directory
+3. Run the command:
+   ```bash
    dotnet publish --configuration Release -o ./publish
    ```
-4. Исполняемый файл будет по пути `publish/MediaTracker.exe`.
+4. The executable file will be located at `publish/MediaTracker.exe`
 
-## Использование эндпоинтов в MixItUp и OBS
+## Using Endpoints in MixItUp and OBS
 
-**MediaTracker** предоставляет два HTTP эндпоинта для получения информации о текущей медиа:
+**MediaTracker** provides 3 HTTP endpoints for retrieving current media information:
 
-- `GET http://127.0.0.1:5050/` - Возвращает строку в формате "Artist - Title" или "Сейчас ничего не играет".
-- `GET http://127.0.0.1:5050/json` - Возвращает JSON объект с полями: Artist, Title, IsPlaying, SourceApp, Timestamp.
+- `GET http://127.0.0.1:5050/` - Returns a string in the format "Artist - Title" or "Nothing is playing right now"
+- `GET http://127.0.0.1:5050/json` - Returns a JSON object with fields: Artist, Title, IsPlaying, SourceApp, Timestamp
+- `GET http://127.0.0.1:5050/widget` - HTML Widget for display in OBS
 
-В **MixItUp** вы можете использовать эти эндпоинты для интеграции, например, для создания команды, которая будет возвращать текущий трек на стриме.
-**Инструкция** находится в файле [install-as-command.md](docs/install-as-command.md)
+### MixItUp Integration
 
-В **OBS** вы можете использовать эти эндпоинты для интеграции, например, для отображения текущей песни в стриме.
-**Инструкция** находится в файле [install-as-obs-widget.md](docs/install-as-obs-widget-browser.md)
+In **MixItUp**, you can use these endpoints for integration, for example, to create a command that returns the current track for a stream.
 
-## Лицензия
+**Instructions** are in the file: [install-as-command.md](docs/install-as-command.md)
 
-MIT (см. файл [LICENSE](LICENSE))
+### OBS Integration
+
+In **OBS**, you can use these endpoints for integration, for example, to display the current song on a stream.
+
+**Instructions** are in the file: [install-as-obs-widget.md](docs/install-as-obs-widget.md)
+
+## License
+
+MIT License - see the [LICENSE](LICENSE) file for details.
