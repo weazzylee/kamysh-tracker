@@ -1,5 +1,7 @@
 # KamyshTracker
 
+**Язык / Language:** [ENG](README.md) | **RU**
+
 KamyshTracker - нативный плагин для OBS Studio под Windows. Он читает текущий трек через Windows System Media Transport Controls (SMTC) и отвечает в Twitch-чат на команду с названием текущего трека.
 
 Старое tray-приложение и локальный HTTP API удалены. Плагин больше не открывает `127.0.0.1:5050`, не предоставляет `/json` или `/widget` и не требует Browser Source в OBS.

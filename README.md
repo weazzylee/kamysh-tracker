@@ -1,5 +1,7 @@
 # KamyshTracker
 
+**Language / Язык:** **ENG** | [RU](README.ru.md)
+
 KamyshTracker is a native OBS Studio plugin for Windows. It reads the current media session through Windows System Media Transport Controls (SMTC) and answers a Twitch chat command with the current track.
 
 The old tray application and local HTTP API were removed. The plugin no longer opens `127.0.0.1:5050`, no longer exposes `/json` or `/widget`, and no longer uses an OBS Browser Source.
