@@ -45,3 +45,9 @@ TestResults/
 
 # Publish
 publish/
+
+# Native OBS plugin build/dependency/package artifacts
+.deps/
+build/
+package/
+kamyshtracker-obs-plugin.zip

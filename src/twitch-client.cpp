@@ -1,0 +1,806 @@
+#include "twitch-client.hpp"
+
+#include <obs-frontend-api.h>
+#include <obs-service.h>
+#include <obs.h>
+
+#include <winsock2.h>
+#include <ws2tcpip.h>
+
+#include <QCryptographicHash>
+#include <QCoreApplication>
+#include <QClipboard>
+#include <QDesktopServices>
+#include <QEventLoop>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QRandomGenerator>
+#include <QTimer>
+#include <QGuiApplication>
+#include <QUrl>
+#include <QUrlQuery>
+#include <QWebSocket>
+
+#include <algorithm>
+#include <cwctype>
+#include <future>
+#include <thread>
+
+namespace kamyshtracker {
+namespace {
+
+constexpr auto authBase = "https://id.twitch.tv/oauth2/authorize";
+constexpr auto tokenUrl = "https://id.twitch.tv/oauth2/token";
+constexpr auto deviceUrl = "https://id.twitch.tv/oauth2/device";
+constexpr auto usersUrl = "https://api.twitch.tv/helix/users";
+constexpr auto eventSubUrl = "https://api.twitch.tv/helix/eventsub/subscriptions";
+constexpr auto eventSubSocketUrl = "wss://eventsub.wss.twitch.tv/ws";
+constexpr auto chatMessagesUrl = "https://api.twitch.tv/helix/chat/messages";
+
+struct OAuthCallbackResult {
+    QString code;
+    QString state;
+    QString error;
+    QString errorDescription;
+};
+
+OAuthCallbackResult waitForOAuthCallback(quint16 port, int timeoutSeconds)
+{
+    OAuthCallbackResult result;
+    WSADATA data;
+    if (WSAStartup(MAKEWORD(2, 2), &data) != 0) {
+        result.error = "local_server_failed";
+        result.errorDescription = "WSAStartup failed";
+        return result;
+    }
+
+    SOCKET server = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (server == INVALID_SOCKET) {
+        result.error = "local_server_failed";
+        result.errorDescription = "socket failed";
+        WSACleanup();
+        return result;
+    }
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons(port);
+
+    int reuse = 1;
+    setsockopt(server, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char *>(&reuse), sizeof(reuse));
+
+    if (bind(server, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) == SOCKET_ERROR ||
+        listen(server, 1) == SOCKET_ERROR) {
+        result.error = "local_server_failed";
+        result.errorDescription = "Could not listen on localhost callback port";
+        closesocket(server);
+        WSACleanup();
+        return result;
+    }
+
+    fd_set readSet;
+    FD_ZERO(&readSet);
+    FD_SET(server, &readSet);
+    timeval timeout{};
+    timeout.tv_sec = timeoutSeconds;
+    timeout.tv_usec = 0;
+
+    if (select(0, &readSet, nullptr, nullptr, &timeout) <= 0) {
+        result.error = "timeout";
+        result.errorDescription = "OAuth callback timed out";
+        closesocket(server);
+        WSACleanup();
+        return result;
+    }
+
+    SOCKET client = accept(server, nullptr, nullptr);
+    closesocket(server);
+    if (client == INVALID_SOCKET) {
+        result.error = "local_server_failed";
+        result.errorDescription = "accept failed";
+        WSACleanup();
+        return result;
+    }
+
+    std::string request(8192, '\0');
+    const int received = recv(client, request.data(), static_cast<int>(request.size() - 1), 0);
+    if (received > 0) {
+        request.resize(received);
+        const auto firstLineEnd = request.find("\r\n");
+        const auto firstLine = request.substr(0, firstLineEnd == std::string::npos ? request.size() : firstLineEnd);
+        const auto firstSpace = firstLine.find(' ');
+        const auto secondSpace = firstSpace == std::string::npos ? std::string::npos : firstLine.find(' ', firstSpace + 1);
+        const auto target = firstSpace == std::string::npos || secondSpace == std::string::npos
+            ? std::string("/")
+            : firstLine.substr(firstSpace + 1, secondSpace - firstSpace - 1);
+
+        QUrl callback(QStringLiteral("http://localhost") + QString::fromStdString(target));
+        QUrlQuery query(callback);
+        result.code = query.queryItemValue("code");
+        result.state = query.queryItemValue("state");
+        result.error = query.queryItemValue("error");
+        result.errorDescription = query.queryItemValue("error_description");
+    }
+
+    const QByteArray html = result.error.isEmpty()
+        ? QByteArray("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n"
+            "<html><body><h3>KamyshTracker login complete.</h3>You can close this tab.</body></html>")
+        : QByteArray("HTTP/1.1 400 Bad Request\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n"
+            "<html><body><h3>KamyshTracker login failed.</h3>"
+            "<p>Check the Twitch Developer Console redirect URI.</p></body></html>");
+    send(client, html.constData(), static_cast<int>(html.size()), 0);
+    shutdown(client, SD_SEND);
+    closesocket(client);
+    WSACleanup();
+    return result;
+}
+
+QString base64Url(QByteArray value)
+{
+    value = value.toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
+    return QString::fromLatin1(value);
+}
+
+QString randomVerifier()
+{
+    QByteArray bytes;
+    bytes.resize(48);
+    for (char &byte : bytes)
+        byte = static_cast<char>(QRandomGenerator::global()->generate() & 0xff);
+    return base64Url(bytes);
+}
+
+QByteArray httpRequest(
+    const QString &method,
+    const QUrl &url,
+    const QByteArray &body,
+    const QList<QPair<QByteArray, QByteArray>> &headers,
+    int *statusCode,
+    QString *error)
+{
+    QNetworkAccessManager manager;
+    QNetworkRequest request(url);
+    for (const auto &header : headers)
+        request.setRawHeader(header.first, header.second);
+
+    QNetworkReply *reply = nullptr;
+    if (method == "GET")
+        reply = manager.get(request);
+    else if (method == "POST")
+        reply = manager.post(request, body);
+    else
+        reply = manager.sendCustomRequest(request, method.toUtf8(), body);
+
+    QEventLoop loop;
+    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    QTimer::singleShot(30000, &loop, &QEventLoop::quit);
+    loop.exec();
+
+    const auto status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    if (statusCode)
+        *statusCode = status;
+    const auto response = reply->readAll();
+    if (reply->error() != QNetworkReply::NoError && error)
+        *error = reply->errorString();
+    reply->deleteLater();
+    return response;
+}
+
+bool parseUser(const QByteArray &body, PluginSettings &settings, QString *error)
+{
+    const auto doc = QJsonDocument::fromJson(body);
+    const auto data = doc.object().value("data").toArray();
+    if (data.isEmpty()) {
+        if (error)
+            *error = "Twitch did not return user data";
+        return false;
+    }
+
+    const auto user = data.first().toObject();
+    settings.twitchUserId = user.value("id").toString().toStdString();
+    settings.twitchBroadcasterId = settings.twitchUserId;
+    settings.twitchLogin = user.value("login").toString().toStdString();
+    return !settings.twitchUserId.empty() && !settings.twitchLogin.empty();
+}
+
+void replaceAll(std::wstring &text, const std::wstring &from, const std::wstring &to)
+{
+    size_t pos = 0;
+    while ((pos = text.find(from, pos)) != std::wstring::npos) {
+        text.replace(pos, from.size(), to);
+        pos += to.size();
+    }
+}
+
+std::wstring trimCopy(std::wstring value)
+{
+    const auto first = value.find_first_not_of(L" \t\r\n");
+    if (first == std::wstring::npos)
+        return {};
+    const auto last = value.find_last_not_of(L" \t\r\n");
+    return value.substr(first, last - first + 1);
+}
+
+std::wstring lowerCopy(std::wstring value)
+{
+    std::transform(value.begin(), value.end(), value.begin(), [](wchar_t c) {
+        return static_cast<wchar_t>(::towlower(c));
+    });
+    return value;
+}
+
+bool matchesCommandTrigger(const std::wstring &message, const std::wstring &triggers)
+{
+    const auto normalizedMessage = lowerCopy(trimCopy(message));
+    size_t pos = 0;
+    while (pos < triggers.size()) {
+        while (pos < triggers.size() && ::iswspace(triggers[pos]))
+            ++pos;
+        const auto start = pos;
+        while (pos < triggers.size() && !::iswspace(triggers[pos]))
+            ++pos;
+        if (start == pos)
+            continue;
+
+        if (normalizedMessage == lowerCopy(triggers.substr(start, pos - start)))
+            return true;
+    }
+    return false;
+}
+
+}
+
+TwitchClient::TwitchClient() = default;
+
+TwitchClient::~TwitchClient()
+{
+    stop();
+}
+
+void TwitchClient::configure(PluginSettings settings, MediaProvider mediaProvider, StatusCallback statusCallback)
+{
+    std::lock_guard lock(mutex_);
+    settings_ = std::move(settings);
+    mediaProvider_ = std::move(mediaProvider);
+    statusCallback_ = std::move(statusCallback);
+}
+
+void TwitchClient::setSettingsChangedCallback(SettingsChangedCallback callback)
+{
+    std::lock_guard lock(mutex_);
+    settingsChangedCallback_ = std::move(callback);
+}
+
+void TwitchClient::start()
+{
+    bool expected = false;
+    if (!running_.compare_exchange_strong(expected, true))
+        return;
+
+    worker_ = std::thread([this] { eventSubLoop(); });
+}
+
+void TwitchClient::stop()
+{
+    if (!running_.exchange(false))
+        return;
+
+    if (worker_.joinable())
+        worker_.join();
+}
+
+bool TwitchClient::loginWithBrowser(const PluginSettings &inputSettings, PluginSettings &settings, std::string &error)
+{
+    const auto &clientId = inputSettings.twitchClientId;
+    if (clientId.empty()) {
+        error = "Twitch Client ID is required";
+        return false;
+    }
+
+    QUrlQuery deviceBody;
+    deviceBody.addQueryItem("client_id", QString::fromStdString(clientId));
+    deviceBody.addQueryItem("scopes", "user:read:chat user:write:chat");
+
+    int status = 0;
+    QString networkError;
+    const auto deviceResponse = httpRequest(
+        "POST",
+        QUrl(deviceUrl),
+        deviceBody.query(QUrl::FullyEncoded).toUtf8(),
+        {{ "Content-Type", "application/x-www-form-urlencoded" }},
+        &status,
+        &networkError);
+
+    if (status < 200 || status >= 300) {
+        error = ("Device authorization failed: " + networkError + " " + QString::fromUtf8(deviceResponse)).toStdString();
+        return false;
+    }
+
+    const auto deviceJson = QJsonDocument::fromJson(deviceResponse).object();
+    const auto deviceCode = deviceJson.value("device_code").toString();
+    const auto userCode = deviceJson.value("user_code").toString();
+    const auto verificationUri = deviceJson.value("verification_uri").toString();
+    const auto verificationUriComplete = deviceJson.value("verification_uri_complete").toString();
+    const int expiresIn = deviceJson.value("expires_in").toInt(1800);
+    const int intervalSeconds = std::max(1, deviceJson.value("interval").toInt(5));
+
+    if (deviceCode.isEmpty() || verificationUri.isEmpty()) {
+        error = "Twitch did not return a device authorization code";
+        return false;
+    }
+
+    if (auto *clipboard = QGuiApplication::clipboard())
+        clipboard->setText(userCode);
+
+    {
+        std::lock_guard lock(mutex_);
+        status_ = ("Open Twitch activation and enter code: " + userCode).toStdString();
+    }
+
+    const QUrl activate(verificationUriComplete.isEmpty() ? verificationUri : verificationUriComplete);
+    QDesktopServices::openUrl(activate);
+
+    QByteArray tokenResponse;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(expiresIn);
+    while (std::chrono::steady_clock::now() < deadline) {
+        QUrlQuery tokenBody;
+        tokenBody.addQueryItem("client_id", QString::fromStdString(clientId));
+        tokenBody.addQueryItem("device_code", deviceCode);
+        tokenBody.addQueryItem("grant_type", "urn:ietf:params:oauth:grant-type:device_code");
+
+        status = 0;
+        networkError.clear();
+        tokenResponse = httpRequest(
+            "POST",
+            QUrl(tokenUrl),
+            tokenBody.query(QUrl::FullyEncoded).toUtf8(),
+            {{ "Content-Type", "application/x-www-form-urlencoded" }},
+            &status,
+            &networkError);
+
+        if (status >= 200 && status < 300)
+            break;
+
+        const auto pollJson = QJsonDocument::fromJson(tokenResponse).object();
+        const auto message = pollJson.value("message").toString();
+        const auto pollStatus = pollJson.value("status").toInt(status);
+        if (pollStatus != 400 || (!message.contains("authorization", Qt::CaseInsensitive) &&
+            !message.contains("pending", Qt::CaseInsensitive))) {
+            error = ("Token exchange failed: " + networkError + " " + QString::fromUtf8(tokenResponse)).toStdString();
+            return false;
+        }
+
+        const auto waitUntil = std::chrono::steady_clock::now() + std::chrono::seconds(intervalSeconds);
+        while (std::chrono::steady_clock::now() < waitUntil)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    }
+
+    if (status < 200 || status >= 300) {
+        error = "Twitch device authorization timed out";
+        return false;
+    }
+
+    const auto tokenJson = QJsonDocument::fromJson(tokenResponse).object();
+    settings.twitchClientId = clientId;
+    settings.twitchAccessToken = tokenJson.value("access_token").toString().toStdString();
+    settings.twitchRefreshToken = tokenJson.value("refresh_token").toString().toStdString();
+
+    QString userError;
+    if (!refreshUserInfo(settings, error))
+        return false;
+
+    configure(settings, mediaProvider_, statusCallback_);
+    return true;
+}
+
+void TwitchClient::logout(PluginSettings &settings)
+{
+    settings.twitchAccessToken.clear();
+    settings.twitchRefreshToken.clear();
+    settings.twitchLogin.clear();
+    settings.twitchUserId.clear();
+    settings.twitchBroadcasterId.clear();
+    configure(settings, mediaProvider_, statusCallback_);
+}
+
+bool TwitchClient::sendTestMessage(std::string &error)
+{
+    PluginSettings snapshot;
+    MediaProvider provider;
+    {
+        std::lock_guard lock(mutex_);
+        snapshot = settings_;
+        provider = mediaProvider_;
+    }
+
+    if (!snapshot.enabled) {
+        error = "Plugin is disabled";
+        return false;
+    }
+
+    if (!isReadyFor(readObsTwitchAccount())) {
+        error = "Twitch account is not ready or does not match OBS";
+        return false;
+    }
+
+    if (snapshot.requireStreamingActive && !obs_frontend_streaming_active()) {
+        error = "Streaming is not active";
+        return false;
+    }
+
+    if (!ensureToken(error))
+        return false;
+
+    const auto state = provider ? provider() : MediaState{};
+    return sendChatMessage(renderResponse(state), error);
+}
+
+bool TwitchClient::isReadyFor(const ObsTwitchAccount &obsAccount) const
+{
+    std::lock_guard lock(mutex_);
+    if (!settings_.enabled || settings_.twitchAccessToken.empty() || settings_.twitchLogin.empty())
+        return false;
+    if (!obsAccount.isTwitch)
+        return false;
+    if (obsAccount.login.empty())
+        return true;
+    return QString::fromStdString(settings_.twitchLogin).compare(
+        QString::fromStdString(obsAccount.login), Qt::CaseInsensitive) == 0;
+}
+
+std::string TwitchClient::status() const
+{
+    std::lock_guard lock(mutex_);
+    return status_;
+}
+
+void TwitchClient::eventSubLoop()
+{
+    while (running_) {
+        PluginSettings snapshot;
+        {
+            std::lock_guard lock(mutex_);
+            snapshot = settings_;
+        }
+
+        if (!snapshot.enabled || snapshot.twitchAccessToken.empty() || snapshot.twitchClientId.empty()) {
+            {
+                std::lock_guard lock(mutex_);
+                status_ = "Not authorized";
+            }
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+            continue;
+        }
+
+        std::string error;
+        if (!ensureToken(error)) {
+            std::lock_guard lock(mutex_);
+            status_ = "Token error: " + error;
+            std::this_thread::sleep_for(std::chrono::seconds(10));
+            continue;
+        }
+
+        QEventLoop loop;
+        QWebSocket socket;
+        QString sessionId;
+        bool subscribed = false;
+
+        QObject::connect(&socket, &QWebSocket::connected, [&] {
+            std::lock_guard lock(mutex_);
+            status_ = "EventSub connected";
+        });
+
+        QObject::connect(&socket, &QWebSocket::textMessageReceived, [&](const QString &message) {
+            const auto doc = QJsonDocument::fromJson(message.toUtf8());
+            const auto root = doc.object();
+            const auto metadata = root.value("metadata").toObject();
+            const auto type = metadata.value("message_type").toString();
+            const auto payload = root.value("payload").toObject();
+
+            if (type == "session_welcome") {
+                sessionId = payload.value("session").toObject().value("id").toString();
+                std::string subscribeError;
+                subscribed = subscribeChat(sessionId.toStdString(), subscribeError);
+                std::lock_guard lock(mutex_);
+                status_ = subscribed ? "Chat command active" : "Subscribe failed: " + subscribeError;
+            } else if (type == "notification") {
+                const auto event = payload.value("event").toObject();
+                const auto chatter = event.value("chatter_user_login").toString().toStdString();
+                const auto text = event.value("message").toObject().value("text").toString().toStdWString();
+                handleChatText(chatter, text);
+            } else if (type == "session_reconnect") {
+                const auto reconnectUrl = payload.value("session").toObject().value("reconnect_url").toString();
+                socket.close();
+                socket.open(QUrl(reconnectUrl));
+            }
+        });
+
+        QObject::connect(&socket, &QWebSocket::disconnected, &loop, &QEventLoop::quit);
+        QObject::connect(&socket, &QWebSocket::errorOccurred, [&](QAbstractSocket::SocketError) {
+            std::lock_guard lock(mutex_);
+            status_ = "WebSocket error: " + socket.errorString().toStdString();
+            loop.quit();
+        });
+
+        socket.open(QUrl(eventSubSocketUrl));
+        QTimer watchdog;
+        QObject::connect(&watchdog, &QTimer::timeout, [&] {
+            if (!running_) {
+                socket.close();
+                loop.quit();
+            }
+        });
+        watchdog.start(1000);
+        loop.exec();
+        socket.close();
+
+        if (running_)
+            std::this_thread::sleep_for(std::chrono::seconds(subscribed ? 2 : 10));
+    }
+}
+
+bool TwitchClient::refreshUserInfo(PluginSettings &settings, std::string &error)
+{
+    int status = 0;
+    QString networkError;
+    const auto body = httpRequest(
+        "GET",
+        QUrl(usersUrl),
+        {},
+        {
+            { "Authorization", ("Bearer " + settings.twitchAccessToken).c_str() },
+            { "Client-Id", settings.twitchClientId.c_str() },
+        },
+        &status,
+        &networkError);
+
+    if (status < 200 || status >= 300) {
+        error = ("Get Users failed: " + networkError + " " + QString::fromUtf8(body)).toStdString();
+        return false;
+    }
+
+    QString parseError;
+    if (!parseUser(body, settings, &parseError)) {
+        error = parseError.toStdString();
+        return false;
+    }
+    return true;
+}
+
+bool TwitchClient::ensureToken(std::string &error)
+{
+    PluginSettings snapshot;
+    {
+        std::lock_guard lock(mutex_);
+        snapshot = settings_;
+    }
+
+    if (snapshot.twitchAccessToken.empty())
+        return false;
+
+    if (refreshUserInfo(snapshot, error)) {
+        std::lock_guard lock(mutex_);
+        settings_.twitchLogin = snapshot.twitchLogin;
+        settings_.twitchUserId = snapshot.twitchUserId;
+        settings_.twitchBroadcasterId = snapshot.twitchBroadcasterId;
+        return true;
+    }
+
+    if (snapshot.twitchRefreshToken.empty())
+        return false;
+
+    QUrlQuery refreshBody;
+    refreshBody.addQueryItem("grant_type", "refresh_token");
+    refreshBody.addQueryItem("refresh_token", QString::fromStdString(snapshot.twitchRefreshToken));
+    refreshBody.addQueryItem("client_id", QString::fromStdString(snapshot.twitchClientId));
+
+    int status = 0;
+    QString networkError;
+    const auto tokenResponse = httpRequest(
+        "POST",
+        QUrl(tokenUrl),
+        refreshBody.query(QUrl::FullyEncoded).toUtf8(),
+        {{ "Content-Type", "application/x-www-form-urlencoded" }},
+        &status,
+        &networkError);
+
+    if (status < 200 || status >= 300) {
+        error = ("Token refresh failed: " + networkError + " " + QString::fromUtf8(tokenResponse)).toStdString();
+        return false;
+    }
+
+    const auto tokenJson = QJsonDocument::fromJson(tokenResponse).object();
+    snapshot.twitchAccessToken = tokenJson.value("access_token").toString().toStdString();
+    snapshot.twitchRefreshToken = tokenJson.value("refresh_token").toString().toStdString();
+    if (!refreshUserInfo(snapshot, error))
+        return false;
+
+    SettingsChangedCallback callback;
+    {
+        std::lock_guard lock(mutex_);
+        settings_ = snapshot;
+        callback = settingsChangedCallback_;
+    }
+    if (callback)
+        callback(snapshot);
+    return true;
+}
+
+bool TwitchClient::subscribeChat(const std::string &sessionId, std::string &error)
+{
+    PluginSettings snapshot;
+    {
+        std::lock_guard lock(mutex_);
+        snapshot = settings_;
+    }
+
+    QJsonObject condition;
+    condition["broadcaster_user_id"] = QString::fromStdString(snapshot.twitchBroadcasterId);
+    condition["user_id"] = QString::fromStdString(snapshot.twitchUserId);
+
+    QJsonObject transport;
+    transport["method"] = "websocket";
+    transport["session_id"] = QString::fromStdString(sessionId);
+
+    QJsonObject payload;
+    payload["type"] = "channel.chat.message";
+    payload["version"] = "1";
+    payload["condition"] = condition;
+    payload["transport"] = transport;
+
+    int status = 0;
+    QString networkError;
+    const auto body = httpRequest(
+        "POST",
+        QUrl(eventSubUrl),
+        QJsonDocument(payload).toJson(QJsonDocument::Compact),
+        {
+            { "Authorization", ("Bearer " + snapshot.twitchAccessToken).c_str() },
+            { "Client-Id", snapshot.twitchClientId.c_str() },
+            { "Content-Type", "application/json" },
+        },
+        &status,
+        &networkError);
+
+    if (status < 200 || status >= 300) {
+        error = ("EventSub subscribe failed: " + networkError + " " + QString::fromUtf8(body)).toStdString();
+        return false;
+    }
+    return true;
+}
+
+bool TwitchClient::sendChatMessage(const std::wstring &message, std::string &error)
+{
+    PluginSettings snapshot;
+    {
+        std::lock_guard lock(mutex_);
+        snapshot = settings_;
+    }
+
+    QJsonObject payload;
+    payload["broadcaster_id"] = QString::fromStdString(snapshot.twitchBroadcasterId);
+    payload["sender_id"] = QString::fromStdString(snapshot.twitchUserId);
+    payload["message"] = QString::fromStdWString(message);
+
+    int status = 0;
+    QString networkError;
+    const auto body = httpRequest(
+        "POST",
+        QUrl(chatMessagesUrl),
+        QJsonDocument(payload).toJson(QJsonDocument::Compact),
+        {
+            { "Authorization", ("Bearer " + snapshot.twitchAccessToken).c_str() },
+            { "Client-Id", snapshot.twitchClientId.c_str() },
+            { "Content-Type", "application/json" },
+        },
+        &status,
+        &networkError);
+
+    if (status < 200 || status >= 300) {
+        error = ("Send chat message failed: " + networkError + " " + QString::fromUtf8(body)).toStdString();
+        return false;
+    }
+
+    const auto data = QJsonDocument::fromJson(body).object().value("data").toArray();
+    if (!data.isEmpty() && !data.first().toObject().value("is_sent").toBool()) {
+        error = "Twitch rejected the chat message";
+        return false;
+    }
+    return true;
+}
+
+void TwitchClient::handleChatText(const std::string &, const std::wstring &message)
+{
+    PluginSettings snapshot;
+    MediaProvider provider;
+    {
+        std::lock_guard lock(mutex_);
+        snapshot = settings_;
+        provider = mediaProvider_;
+    }
+
+    if (!snapshot.enabled || !matchesCommandTrigger(message, snapshot.commandTrigger))
+        return;
+
+    if (!isReadyFor(readObsTwitchAccount()))
+        return;
+
+    if (snapshot.requireStreamingActive && !obs_frontend_streaming_active())
+        return;
+
+    const auto now = std::chrono::steady_clock::now();
+    {
+        std::lock_guard lock(mutex_);
+        if (lastReply_ != std::chrono::steady_clock::time_point::min() &&
+            now - lastReply_ < std::chrono::seconds(snapshot.replyCooldownSeconds))
+            return;
+        lastReply_ = now;
+    }
+
+    const auto state = provider ? provider() : MediaState{};
+    std::string error;
+    if (!sendChatMessage(renderResponse(state), error)) {
+        std::lock_guard lock(mutex_);
+        status_ = error;
+    }
+}
+
+std::wstring TwitchClient::renderResponse(const MediaState &state) const
+{
+    PluginSettings snapshot;
+    {
+        std::lock_guard lock(mutex_);
+        snapshot = settings_;
+    }
+
+    std::wstring response = state.isPlaying && state.hasText()
+        ? snapshot.responseTemplate
+        : snapshot.notPlayingTemplate;
+
+    replaceAll(response, L"{artist}", state.artist);
+    replaceAll(response, L"{title}", state.title);
+    replaceAll(response, L"{track}", state.displayText(snapshot.notPlayingTemplate));
+    replaceAll(response, L"{source}", state.sourceApp);
+    return response;
+}
+
+ObsTwitchAccount readObsTwitchAccount()
+{
+    ObsTwitchAccount account;
+    obs_service_t *service = obs_frontend_get_streaming_service();
+    if (!service)
+        return account;
+
+    const char *serviceName = obs_service_get_name(service);
+    if (serviceName)
+        account.serviceName = serviceName;
+
+    obs_data_t *settings = obs_service_get_settings(service);
+    const char *serviceValue = obs_data_get_string(settings, "service");
+    const QString serviceText = QString("%1 %2")
+        .arg(QString::fromUtf8(serviceName ? serviceName : ""))
+        .arg(QString::fromUtf8(serviceValue ? serviceValue : ""));
+    account.isTwitch = serviceText.contains("twitch", Qt::CaseInsensitive);
+
+    const char *connectUser = obs_service_get_connect_info(service, OBS_SERVICE_CONNECT_INFO_USERNAME);
+    if (connectUser && *connectUser)
+        account.login = connectUser;
+
+    for (const char *key : {"login", "username", "channel", "twitch_login", "account_login"}) {
+        const char *value = obs_data_get_string(settings, key);
+        if (value && *value) {
+            account.login = value;
+            break;
+        }
+    }
+
+    obs_data_release(settings);
+    return account;
+}
+
+}

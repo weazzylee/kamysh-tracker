@@ -1,29 +1,35 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: windows-latest
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: 8.0.x
+      - name: Install build tools
+        run: |
+          choco install cmake ninja -y
 
-    - name: Publish
-      run: dotnet publish -c Release -r win-x64 -o ./publish
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 
-    - name: Create Release
-      uses: softprops/action-gh-release@v2
-      with:
-        files: ./publish/MediaTracker.exe
-        generate_release_notes: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Package
+        run: |
+          cmake --install build --config Release --prefix package
+          Compress-Archive -Path package\* -DestinationPath kamyshtracker-obs-plugin.zip
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: kamyshtracker-obs-plugin.zip
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

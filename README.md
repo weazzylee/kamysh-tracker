@@ -1,60 +1,67 @@
-# MediaTracker
+# KamyshTracker
 
-- **EN README** (You are here)
-- **[RU README](README.ru.md)**
+KamyshTracker is a native OBS Studio plugin for Windows. It reads the current media session through Windows System Media Transport Controls (SMTC) and answers a Twitch chat command with the current track.
 
-## Description
+The old tray application and local HTTP API were removed. The plugin no longer opens `127.0.0.1:5050`, no longer exposes `/json` or `/widget`, and no longer uses an OBS Browser Source.
 
-**MediaTracker** is a Windows application built on .NET 8 that tracks currently playing media via System Media Transport Controls (SMTC). The application runs in the system tray and provides an HTTP API on port 5050 for integration with external applications, such as MixItUp.
+## What It Does
 
-### Tracked Applications
+- Tracks current media from SMTC, with priority for Spotify and Yandex Music.
+- Filters common non-music sources such as browsers, YouTube, Twitch, Netflix, Prime Video, Facebook, Instagram, and similar sources.
+- Adds a `Tools -> KamyshTracker` settings window inside OBS.
+- Authorizes Twitch separately with OAuth Authorization Code + PKCE.
+- Checks that the authorized Twitch account matches the Twitch account selected in OBS before answering chat.
+- Listens for chat messages through Twitch EventSub WebSocket.
+- Sends replies through Twitch Helix Send Chat Message API.
 
-The application tracks media from any application that supports SMTC, with a priority on music applications like Spotify and Yandex Music. It automatically filters out non-music sources, including browsers (Chrome, Firefox, Edge), video platforms (YouTube, Twitch, Netflix, Prime Video), social networks (Facebook, Instagram), and others, to display only relevant music information.
+## Requirements
 
-## System Requirements
+- Windows 10/11 x64.
+- OBS Studio 30+.
+- Visual Studio 2022 Build Tools with MSVC.
+- CMake 3.24+.
+- Qt 6 with Widgets, Network, and WebSockets.
+- OBS/libobs development files available to CMake.
+- A Twitch application Client ID. Login uses Twitch Device Code Flow, so no client secret is required.
 
-- **Operating System**: Windows 10/11 (version 21H1 or newer)
-- **[.NET 8 Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/8.0)** - required to run the application (when built in Release mode, the application is self-contained, but in this project SelfContained=false to reduce the executable file size)
+## Build
 
-## Installation of the Pre-built Executable
+Configure the project with paths that match your OBS and Qt installation:
 
-1. Download the ready-made executable file `MediaTracker.exe` from the [project releases](https://github.com/weazzylee/media-tracker/releases)
-2. Run `MediaTracker.exe` - the application will start in the system tray (near the clock in the taskbar)
-3. Ensure the application is running: it should automatically start an HTTP server at `http://127.0.0.1:5050`
-4. Check the endpoint: open a browser and navigate to `http://127.0.0.1:5050/` - you should see the current track in the format "Artist - Title" or "Nothing is playing right now"
+```powershell
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
+  -DCMAKE_PREFIX_PATH="C:\Path\To\Qt;C:\Path\To\OBS"
+cmake --build build --config Release
+cmake --install build --config Release --prefix "C:\Program Files\obs-studio"
+```
 
-## Building from Source
+The plugin module is `kamyshtracker.dll`.
 
-Building from source requires the .NET 8 SDK.
+## Setup In OBS
 
-1. Clone the repository
-2. Navigate to the project directory
-3. Run the command:
-   ```bash
-   dotnet publish --configuration Release -o ./publish
-   ```
-4. The executable file will be located at `publish/MediaTracker.exe`
+1. Select and authorize Twitch as the current OBS streaming service.
+2. Open `Tools -> KamyshTracker`.
+3. Keep the default Twitch Client ID or replace it with your own application ID.
+4. Click `Login`; your browser opens Twitch activation, then authorize the same Twitch account that OBS uses.
+5. Configure the command and response templates.
 
-## Using Endpoints in MixItUp and OBS
+Defaults:
 
-**MediaTracker** provides 3 HTTP endpoints for retrieving current media information:
+- Commands: `!трек !track !shazam !шазам`
+- Playing response: `Сейчас играет: {artist} - {title}`
+- Not playing response: `Сейчас ничего не играет`
 
-- `GET http://127.0.0.1:5050/` - Returns a string in the format "Artist - Title" or "Nothing is playing right now"
-- `GET http://127.0.0.1:5050/json` - Returns a JSON object with fields: Artist, Title, IsPlaying, SourceApp, Timestamp
-- `GET http://127.0.0.1:5050/widget` - HTML Widget for display in OBS
+Available placeholders:
 
-### MixItUp Integration
+- `{artist}`
+- `{title}`
+- `{track}`
+- `{source}`
 
-In **MixItUp**, you can use these endpoints for integration, for example, to create a command that returns the current track for a stream.
+If OBS is not configured for Twitch, KamyshTracker will not answer chat commands. If OBS exposes the Twitch login, the plugin requires it to match the OAuth account. If OBS only exposes a Twitch stream-key service and hides the login, the plugin uses the OAuth account and shows this in the settings window.
 
-**Instructions** are in the file: [install-as-command.md](docs/install-as-command.md)
+## Notes
 
-### OBS Integration
+OBS does not expose a supported public API for third-party plugins to reuse the Twitch OAuth token from the OBS login. KamyshTracker therefore performs its own OAuth login and treats OBS account matching as a safety gate.
 
-In **OBS**, you can use these endpoints for integration, for example, to display the current song on a stream.
-
-**Instructions** are in the file: [install-as-obs-widget.md](docs/install-as-obs-widget.md)
-
-## License
-
-MIT License - see the [LICENSE](LICENSE) file for details.
+Tokens are stored in the current OBS profile configuration file `kamyshtracker.ini`. Access and refresh tokens are not shown in the UI and should not be shared.
