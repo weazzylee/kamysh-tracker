@@ -6,6 +6,8 @@ KamyshTracker is a native OBS Studio plugin for Windows. It reads the current me
 
 The old tray application and local HTTP API were removed. The plugin no longer opens `127.0.0.1:5050`, no longer exposes `/json` or `/widget`, and no longer uses an OBS Browser Source.
 
+![KamyshTracker](https://raw.githubusercontent.com/weazzylee/kamysh-tracker/84cc18bffbfb80ca07ea65fd794675db263eb607/track.png)
+
 ## What It Does
 
 - Tracks current media from SMTC, with priority for Spotify and Yandex Music.

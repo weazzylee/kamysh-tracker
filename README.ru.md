@@ -6,6 +6,8 @@ KamyshTracker - нативный плагин для OBS Studio под Windows. 
 
 Старое tray-приложение и локальный HTTP API удалены. Плагин больше не открывает `127.0.0.1:5050`, не предоставляет `/json` или `/widget` и не требует Browser Source в OBS.
 
+![KamyshTracker](https://raw.githubusercontent.com/weazzylee/kamysh-tracker/84cc18bffbfb80ca07ea65fd794675db263eb607/track.png)
+
 ## Возможности
 
 - Читает текущую медиа-сессию через SMTC, с приоритетом Spotify и Yandex Music.
