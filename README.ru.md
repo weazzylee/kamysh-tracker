@@ -18,11 +18,25 @@ KamyshTracker - нативный плагин для OBS Studio под Windows. 
 
 - Windows 10/11 x64.
 - OBS Studio 30+.
+- Для установки готового release не нужны Visual Studio, CMake, Qt и OBS development files.
+- Для сборки из исходников:
 - Visual Studio 2022 Build Tools с MSVC.
 - CMake 3.24+.
 - Qt 6 с модулями Widgets, Network и WebSockets.
 - OBS/libobs development files, доступные для CMake.
 - Twitch application Client ID. Логин использует Twitch Device Code Flow, поэтому client secret не нужен.
+
+## Установка из готового release
+
+1. Скачайте `kamyshtracker-obs-plugin.zip` из последнего GitHub Release: <https://github.com/weazzylee/kamysh-tracker/releases/latest>.
+2. Закройте OBS Studio.
+3. Распакуйте архив в папку установки OBS Studio, обычно это `C:\Program Files\obs-studio`.
+4. Проверьте, что файлы попали в эти папки:
+   - `obs-plugins\64bit\kamyshtracker.dll`
+   - `data\obs-plugins\kamyshtracker\locale\`
+   - `bin\64bit\Qt6WebSockets.dll`
+   - `bin\64bit\tls\`
+5. Запустите OBS Studio и откройте `Tools -> KamyshTracker`.
 
 ## Сборка
 

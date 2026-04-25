@@ -18,11 +18,25 @@ The old tray application and local HTTP API were removed. The plugin no longer o
 
 - Windows 10/11 x64.
 - OBS Studio 30+.
+- For the prebuilt release package: no Visual Studio, CMake, Qt, or OBS development files are required.
+- For building from source:
 - Visual Studio 2022 Build Tools with MSVC.
 - CMake 3.24+.
 - Qt 6 with Widgets, Network, and WebSockets.
 - OBS/libobs development files available to CMake.
 - A Twitch application Client ID. Login uses Twitch Device Code Flow, so no client secret is required.
+
+## Install From Release
+
+1. Download `kamyshtracker-obs-plugin.zip` from the latest GitHub Release: <https://github.com/weazzylee/kamysh-tracker/releases/latest>.
+2. Close OBS Studio.
+3. Extract the archive into your OBS Studio installation directory, usually `C:\Program Files\obs-studio`.
+4. Confirm that the extracted files land in these folders:
+   - `obs-plugins\64bit\kamyshtracker.dll`
+   - `data\obs-plugins\kamyshtracker\locale\`
+   - `bin\64bit\Qt6WebSockets.dll`
+   - `bin\64bit\tls\`
+5. Start OBS Studio and open `Tools -> KamyshTracker`.
 
 ## Build
 
