@@ -11,7 +11,7 @@ struct PluginSettings {
     std::wstring commandTrigger = L"!трек !track !shazam !шазам";
     std::wstring responseTemplate = L"Сейчас играет: {artist} - {title}";
     std::wstring notPlayingTemplate = L"Сейчас ничего не играет";
-    std::string twitchClientId = "gvtl52d300qthfi0ryc4n7f5s7ocz1";
+    std::string twitchClientId = "7hfl0kpbpsxpz0j2v1tg0q6hrvi6iw";
     std::string twitchClientSecret;
     std::string oauthRedirectUri = "http://localhost:17635/callback";
     std::string twitchAccessToken;
