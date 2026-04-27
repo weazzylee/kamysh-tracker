@@ -7,6 +7,7 @@
 #include <obs-module.h>
 
 #include <QMetaObject>
+#include <QObject>
 #include <QPointer>
 #include <QWidget>
 #include <memory>
@@ -24,6 +25,9 @@ QPointer<kamyshtracker::SettingsDialog> settingsDialog;
 void openSettings(void *)
 {
     auto *mainWindow = static_cast<QWidget *>(obs_frontend_get_main_window());
+    if (mediaMonitor)
+        mediaMonitor->start();
+
     if (!settingsDialog) {
         settingsDialog = new kamyshtracker::SettingsDialog(
             *settingsStore,
@@ -31,6 +35,14 @@ void openSettings(void *)
             *twitchClient,
             mainWindow);
         settingsDialog->setAttribute(Qt::WA_DeleteOnClose);
+        QObject::connect(settingsDialog, &QObject::destroyed, [] {
+            if (!settingsStore || !mediaMonitor)
+                return;
+
+            const auto settings = settingsStore->load();
+            if (!settings.enabled || settings.twitchAccessToken.empty())
+                mediaMonitor->stop();
+        });
     }
 
     settingsDialog->show();
@@ -58,9 +70,10 @@ bool obs_module_load()
             settingsStore->save(updatedSettings);
     });
 
-    mediaMonitor->start();
-    if (settings.enabled && !settings.twitchAccessToken.empty())
+    if (settings.enabled && !settings.twitchAccessToken.empty()) {
+        mediaMonitor->start();
         twitchClient->start();
+    }
 
     obs_frontend_add_tools_menu_item("KamyshTracker", openSettings, nullptr);
     return true;

@@ -40,6 +40,8 @@ constexpr auto usersUrl = "https://api.twitch.tv/helix/users";
 constexpr auto eventSubUrl = "https://api.twitch.tv/helix/eventsub/subscriptions";
 constexpr auto eventSubSocketUrl = "wss://eventsub.wss.twitch.tv/ws";
 constexpr auto chatMessagesUrl = "https://api.twitch.tv/helix/chat/messages";
+constexpr auto tokenValidationTtl = std::chrono::minutes(10);
+constexpr auto obsAccountCacheTtl = std::chrono::seconds(30);
 
 struct OAuthCallbackResult {
     QString code;
@@ -268,6 +270,8 @@ void TwitchClient::configure(PluginSettings settings, MediaProvider mediaProvide
     settings_ = std::move(settings);
     mediaProvider_ = std::move(mediaProvider);
     statusCallback_ = std::move(statusCallback);
+    tokenValidatedUntil_ = std::chrono::steady_clock::time_point::min();
+    obsAccountCacheUntil_ = std::chrono::steady_clock::time_point::min();
 }
 
 void TwitchClient::setSettingsChangedCallback(SettingsChangedCallback callback)
@@ -283,6 +287,7 @@ void TwitchClient::start()
         return;
 
     worker_ = std::thread([this] { eventSubLoop(); });
+    replyWorker_ = std::thread([this] { replyLoop(); });
 }
 
 void TwitchClient::stop()
@@ -290,8 +295,16 @@ void TwitchClient::stop()
     if (!running_.exchange(false))
         return;
 
+    replyWake_.notify_all();
     if (worker_.joinable())
         worker_.join();
+    if (replyWorker_.joinable())
+        replyWorker_.join();
+
+    {
+        std::lock_guard lock(replyMutex_);
+        replyQueue_.clear();
+    }
 }
 
 bool TwitchClient::loginWithBrowser(const PluginSettings &inputSettings, PluginSettings &settings, std::string &error)
@@ -463,6 +476,46 @@ std::string TwitchClient::status() const
     return status_;
 }
 
+void TwitchClient::replyLoop()
+{
+    while (running_) {
+        MediaState state;
+        {
+            std::unique_lock lock(replyMutex_);
+            replyWake_.wait(lock, [this] {
+                return !running_ || !replyQueue_.empty();
+            });
+
+            if (!running_)
+                break;
+
+            state = std::move(replyQueue_.front());
+            replyQueue_.pop_front();
+        }
+
+        PluginSettings snapshot;
+        {
+            std::lock_guard lock(mutex_);
+            snapshot = settings_;
+        }
+
+        if (!snapshot.enabled)
+            continue;
+
+        if (snapshot.requireStreamingActive && !obs_frontend_streaming_active())
+            continue;
+
+        if (!isReadyFor(cachedObsAccount()))
+            continue;
+
+        std::string error;
+        if (!ensureToken(error) || !sendChatMessage(renderResponse(state), error)) {
+            std::lock_guard lock(mutex_);
+            status_ = error;
+        }
+    }
+}
+
 void TwitchClient::eventSubLoop()
 {
     while (running_) {
@@ -582,6 +635,9 @@ bool TwitchClient::ensureToken(std::string &error)
     {
         std::lock_guard lock(mutex_);
         snapshot = settings_;
+        if (std::chrono::steady_clock::now() < tokenValidatedUntil_ &&
+            !settings_.twitchAccessToken.empty() && !settings_.twitchLogin.empty())
+            return true;
     }
 
     if (snapshot.twitchAccessToken.empty())
@@ -592,6 +648,7 @@ bool TwitchClient::ensureToken(std::string &error)
         settings_.twitchLogin = snapshot.twitchLogin;
         settings_.twitchUserId = snapshot.twitchUserId;
         settings_.twitchBroadcasterId = snapshot.twitchBroadcasterId;
+        tokenValidatedUntil_ = std::chrono::steady_clock::now() + tokenValidationTtl;
         return true;
     }
 
@@ -637,11 +694,30 @@ bool TwitchClient::ensureToken(std::string &error)
     {
         std::lock_guard lock(mutex_);
         settings_ = snapshot;
+        tokenValidatedUntil_ = std::chrono::steady_clock::now() + tokenValidationTtl;
         callback = settingsChangedCallback_;
     }
     if (callback)
         callback(snapshot);
     return true;
+}
+
+ObsTwitchAccount TwitchClient::cachedObsAccount()
+{
+    const auto now = std::chrono::steady_clock::now();
+    {
+        std::lock_guard lock(mutex_);
+        if (now < obsAccountCacheUntil_)
+            return obsAccountCache_;
+    }
+
+    auto account = readObsTwitchAccount();
+    {
+        std::lock_guard lock(mutex_);
+        obsAccountCache_ = account;
+        obsAccountCacheUntil_ = now + obsAccountCacheTtl;
+    }
+    return account;
 }
 
 bool TwitchClient::subscribeChat(const std::string &sessionId, std::string &error)
@@ -727,6 +803,17 @@ bool TwitchClient::sendChatMessage(const std::wstring &message, std::string &err
     return true;
 }
 
+void TwitchClient::enqueueReply(MediaState state)
+{
+    {
+        std::lock_guard lock(replyMutex_);
+        if (!replyQueue_.empty())
+            return;
+        replyQueue_.push_back(std::move(state));
+    }
+    replyWake_.notify_one();
+}
+
 void TwitchClient::handleChatText(const std::string &, const std::wstring &message)
 {
     PluginSettings snapshot;
@@ -740,12 +827,6 @@ void TwitchClient::handleChatText(const std::string &, const std::wstring &messa
     if (!snapshot.enabled || !matchesCommandTrigger(message, snapshot.commandTrigger))
         return;
 
-    if (!isReadyFor(readObsTwitchAccount()))
-        return;
-
-    if (snapshot.requireStreamingActive && !obs_frontend_streaming_active())
-        return;
-
     const auto now = std::chrono::steady_clock::now();
     {
         std::lock_guard lock(mutex_);
@@ -756,11 +837,7 @@ void TwitchClient::handleChatText(const std::string &, const std::wstring &messa
     }
 
     const auto state = provider ? provider() : MediaState{};
-    std::string error;
-    if (!sendChatMessage(renderResponse(state), error)) {
-        std::lock_guard lock(mutex_);
-        status_ = error;
-    }
+    enqueueReply(state);
 }
 
 std::wstring TwitchClient::renderResponse(const MediaState &state) const

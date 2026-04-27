@@ -106,6 +106,7 @@ SettingsDialog::SettingsDialog(SettingsStore &store, MediaMonitor &monitor, Twit
         }
 
         store_.save(settings_);
+        monitor_.start();
         twitch_.configure(settings_, [&] { return monitor_.current(); }, nullptr);
         twitch_.start();
         refreshStatus();
@@ -117,6 +118,7 @@ SettingsDialog::SettingsDialog(SettingsStore &store, MediaMonitor &monitor, Twit
     });
 
     connect(logout, &QPushButton::clicked, this, [this] {
+        twitch_.stop();
         twitch_.logout(settings_);
         store_.save(settings_);
         refreshStatus();
@@ -125,6 +127,7 @@ SettingsDialog::SettingsDialog(SettingsStore &store, MediaMonitor &monitor, Twit
     connect(test, &QPushButton::clicked, this, [this] {
         saveUi();
         store_.save(settings_);
+        monitor_.start();
         twitch_.configure(settings_, [&] { return monitor_.current(); }, nullptr);
         std::string error;
         if (!twitch_.sendTestMessage(error))
@@ -136,6 +139,12 @@ SettingsDialog::SettingsDialog(SettingsStore &store, MediaMonitor &monitor, Twit
         saveUi();
         store_.save(settings_);
         twitch_.configure(settings_, [&] { return monitor_.current(); }, nullptr);
+        if (settings_.enabled && !settings_.twitchAccessToken.empty()) {
+            monitor_.start();
+            twitch_.start();
+        } else {
+            twitch_.stop();
+        }
         refreshStatus();
     });
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::close);

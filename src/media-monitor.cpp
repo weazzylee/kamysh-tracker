@@ -4,6 +4,7 @@
 #include <array>
 #include <chrono>
 #include <cwctype>
+#include <utility>
 #include <thread>
 #include <vector>
 #include <winrt/Windows.Foundation.Collections.h>
@@ -16,6 +17,9 @@ namespace {
 using winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSession;
 using winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSessionManager;
 using winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSessionPlaybackStatus;
+
+constexpr auto fallbackRefreshInterval = std::chrono::seconds(45);
+constexpr auto eventCoalesceDelay = std::chrono::milliseconds(350);
 
 constexpr std::array<std::wstring_view, 5> musicKeywords = {
     L"spotify", L"yandex", L"yandexmusic", L"yamusic", L"yandex.music"
@@ -64,6 +68,20 @@ MediaState toState(const SessionInfo &info, bool isPlaying)
     };
 }
 
+void clearSubscriptions(std::vector<MediaSessionSubscription> &subscriptions)
+{
+    for (auto &subscription : subscriptions) {
+        try {
+            if (subscription.session) {
+                subscription.session.MediaPropertiesChanged(subscription.mediaPropertiesChanged);
+                subscription.session.PlaybackInfoChanged(subscription.playbackInfoChanged);
+            }
+        } catch (...) {
+        }
+    }
+    subscriptions.clear();
+}
+
 }
 
 MediaMonitor::MediaMonitor() = default;
@@ -79,6 +97,10 @@ bool MediaMonitor::start()
     if (!running_.compare_exchange_strong(expected, true))
         return true;
 
+    {
+        std::lock_guard lock(wakeMutex_);
+        refreshRequested_ = true;
+    }
     worker_ = std::thread([this] { workerLoop(); });
     return true;
 }
@@ -88,6 +110,7 @@ void MediaMonitor::stop()
     if (!running_.exchange(false))
         return;
 
+    wake_.notify_all();
     if (worker_.joinable())
         worker_.join();
 }
@@ -108,10 +131,79 @@ void MediaMonitor::workerLoop()
 {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
 
+    GlobalSystemMediaTransportControlsSessionManager manager{nullptr};
+    winrt::event_token sessionsChanged{};
+    winrt::event_token currentSessionChanged{};
+    std::vector<MediaSessionSubscription> subscriptions;
+
+    auto requestRefresh = [this] {
+        {
+            std::lock_guard lock(wakeMutex_);
+            refreshRequested_ = true;
+        }
+        wake_.notify_one();
+    };
+
+    try {
+        manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync().get();
+        sessionsChanged = manager.SessionsChanged([requestRefresh](auto &&, auto &&) {
+            requestRefresh();
+        });
+        currentSessionChanged = manager.CurrentSessionChanged([requestRefresh](auto &&, auto &&) {
+            requestRefresh();
+        });
+    } catch (...) {
+        publishIfChanged({});
+    }
+
+    auto nextFallback = std::chrono::steady_clock::now();
     while (running_) {
-        refresh();
-        for (int i = 0; i < 20 && running_; ++i)
-            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        bool shouldRefresh = false;
+        bool eventDriven = false;
+        {
+            std::unique_lock lock(wakeMutex_);
+            if (!refreshRequested_) {
+                wake_.wait_until(lock, nextFallback, [this] {
+                    return !running_ || refreshRequested_;
+                });
+            }
+
+            if (!running_)
+                break;
+
+            const auto now = std::chrono::steady_clock::now();
+            eventDriven = refreshRequested_;
+            shouldRefresh = refreshRequested_ || now >= nextFallback;
+            refreshRequested_ = false;
+        }
+
+        if (!shouldRefresh)
+            continue;
+
+        if (eventDriven) {
+            std::unique_lock lock(wakeMutex_);
+            wake_.wait_for(lock, eventCoalesceDelay, [this] {
+                return !running_;
+            });
+            if (!running_)
+                break;
+            refreshRequested_ = false;
+        }
+
+        if (manager)
+            refresh(manager, subscriptions, requestRefresh);
+        else
+            refresh();
+        nextFallback = std::chrono::steady_clock::now() + fallbackRefreshInterval;
+    }
+
+    clearSubscriptions(subscriptions);
+    try {
+        if (manager) {
+            manager.SessionsChanged(sessionsChanged);
+            manager.CurrentSessionChanged(currentSessionChanged);
+        }
+    } catch (...) {
     }
 
     winrt::uninit_apartment();
@@ -121,11 +213,39 @@ void MediaMonitor::refresh()
 {
     try {
         auto manager = GlobalSystemMediaTransportControlsSessionManager::RequestAsync().get();
+        std::vector<MediaSessionSubscription> subscriptions;
+        refresh(manager, subscriptions, {});
+    } catch (...) {
+        publishIfChanged({});
+    }
+}
+
+void MediaMonitor::refresh(
+    const GlobalSystemMediaTransportControlsSessionManager &manager,
+    std::vector<MediaSessionSubscription> &subscriptions,
+    const std::function<void()> &requestRefresh)
+{
+    try {
         auto sessions = manager.GetSessions();
+        clearSubscriptions(subscriptions);
+
         std::vector<SessionInfo> infos;
         infos.reserve(sessions.Size());
+        subscriptions.reserve(sessions.Size());
 
         for (const auto &session : sessions) {
+            if (requestRefresh) {
+                MediaSessionSubscription subscription;
+                subscription.session = session;
+                subscription.mediaPropertiesChanged = session.MediaPropertiesChanged([requestRefresh](auto &&, auto &&) {
+                    requestRefresh();
+                });
+                subscription.playbackInfoChanged = session.PlaybackInfoChanged([requestRefresh](auto &&, auto &&) {
+                    requestRefresh();
+                });
+                subscriptions.push_back(std::move(subscription));
+            }
+
             SessionInfo info;
             info.session = session;
             info.id = std::wstring(session.SourceAppUserModelId().c_str());

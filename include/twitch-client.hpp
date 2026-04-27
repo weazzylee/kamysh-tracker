@@ -5,6 +5,8 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <deque>
 #include <functional>
 #include <mutex>
 #include <string>
@@ -44,10 +46,13 @@ public:
 
 private:
     void eventSubLoop();
+    void replyLoop();
     bool refreshUserInfo(PluginSettings &settings, std::string &error);
     bool ensureToken(std::string &error);
+    [[nodiscard]] ObsTwitchAccount cachedObsAccount();
     bool subscribeChat(const std::string &sessionId, std::string &error);
     bool sendChatMessage(const std::wstring &message, std::string &error);
+    void enqueueReply(MediaState state);
     void handleChatText(const std::string &chatterLogin, const std::wstring &message);
     [[nodiscard]] std::wstring renderResponse(const MediaState &state) const;
 
@@ -59,7 +64,14 @@ private:
     std::string status_ = "Not connected";
     std::atomic_bool running_{false};
     std::thread worker_;
+    std::thread replyWorker_;
+    std::mutex replyMutex_;
+    std::condition_variable replyWake_;
+    std::deque<MediaState> replyQueue_;
     std::chrono::steady_clock::time_point lastReply_ = std::chrono::steady_clock::time_point::min();
+    std::chrono::steady_clock::time_point tokenValidatedUntil_ = std::chrono::steady_clock::time_point::min();
+    ObsTwitchAccount obsAccountCache_;
+    std::chrono::steady_clock::time_point obsAccountCacheUntil_ = std::chrono::steady_clock::time_point::min();
 };
 
 ObsTwitchAccount readObsTwitchAccount();
