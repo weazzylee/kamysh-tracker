@@ -38,9 +38,9 @@ The old tray application and local HTTP API were removed. The plugin no longer o
 4. Confirm that the extracted files land in these folders:
    - `obs-plugins\64bit\kamyshtracker.dll`
    - `data\obs-plugins\kamyshtracker\locale\`
-   - `bin\64bit\Qt6WebSockets.dll`
-   - `bin\64bit\tls\`
 5. Start OBS Studio and open `Tools -> KamyshTracker`.
+
+The release package intentionally does not include Qt DLLs or Qt TLS plugins. KamyshTracker uses the Qt runtime bundled with OBS Studio, which avoids mixing incompatible Qt versions.
 
 ## Build
 

@@ -38,9 +38,9 @@ KamyshTracker - нативный плагин для OBS Studio под Windows. 
 4. Проверьте, что файлы попали в эти папки:
    - `obs-plugins\64bit\kamyshtracker.dll`
    - `data\obs-plugins\kamyshtracker\locale\`
-   - `bin\64bit\Qt6WebSockets.dll`
-   - `bin\64bit\tls\`
 5. Запустите OBS Studio и откройте `Tools -> KamyshTracker`.
+
+Release package специально не содержит Qt DLL и Qt TLS plugins. KamyshTracker использует Qt runtime, который уже поставляется вместе с OBS Studio, чтобы не смешивать несовместимые версии Qt.
 
 ## Сборка
 

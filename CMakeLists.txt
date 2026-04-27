@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(kamyshtracker VERSION 2.0.1 LANGUAGES CXX)
+project(kamyshtracker VERSION 2.0.2 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -86,11 +86,3 @@ install(TARGETS kamyshtracker
 install(DIRECTORY data/
     DESTINATION data/obs-plugins/kamyshtracker
 )
-
-if(EXISTS "${Qt6_DIR}/../../../plugins/tls")
-    install(FILES
-        "${Qt6_DIR}/../../../plugins/tls/qschannelbackend.dll"
-        "${Qt6_DIR}/../../../plugins/tls/qcertonlybackend.dll"
-        DESTINATION bin/64bit/tls
-    )
-endif()
