@@ -5,5 +5,3 @@
 - Improved the `missing client secret` error with a clear setup hint.
 - Updated the default Twitch Client ID to `7hfl0kpbpsxpz0j2v1tg0q6hrvi6iw`.
 - Updated README instructions for Public vs Confidential Twitch apps.
-
-Note: this release currently publishes source archives only. A rebuilt plugin zip is not attached because the local Qt/OBS build dependency folder is not available in this workspace.
