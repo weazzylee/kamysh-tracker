@@ -55,6 +55,9 @@ SettingsDialog::SettingsDialog(SettingsStore &store, MediaMonitor &monitor, Twit
     enabled_ = new QCheckBox(this);
     requireStreaming_ = new QCheckBox(this);
     clientId_ = new QLineEdit(this);
+    clientSecret_ = new QLineEdit(this);
+    clientSecret_->setEchoMode(QLineEdit::Password);
+    clientSecret_->setPlaceholderText("Optional; required for confidential Twitch apps");
     redirectUri_ = new QLineEdit(this);
     redirectUri_->setPlaceholderText("http://localhost:17635/callback");
     command_ = new QLineEdit(this);
@@ -71,6 +74,7 @@ SettingsDialog::SettingsDialog(SettingsStore &store, MediaMonitor &monitor, Twit
     form->addRow("Enabled", enabled_);
     form->addRow("Require stream active", requireStreaming_);
     form->addRow("Twitch Client ID", clientId_);
+    form->addRow("Twitch Client Secret", clientSecret_);
     redirectUri_->setVisible(false);
     form->addRow("Commands", command_);
     form->addRow("Playing response", responseTemplate_);
@@ -149,6 +153,7 @@ void SettingsDialog::loadUi()
     enabled_->setChecked(settings_.enabled);
     requireStreaming_->setChecked(settings_.requireStreamingActive);
     clientId_->setText(QString::fromStdString(settings_.twitchClientId));
+    clientSecret_->setText(QString::fromStdString(settings_.twitchClientSecret));
     redirectUri_->setText(QString::fromStdString(settings_.oauthRedirectUri));
     command_->setText(qs(settings_.commandTrigger));
     responseTemplate_->setText(qs(settings_.responseTemplate));
@@ -161,6 +166,7 @@ void SettingsDialog::saveUi()
     settings_.enabled = enabled_->isChecked();
     settings_.requireStreamingActive = requireStreaming_->isChecked();
     settings_.twitchClientId = clientId_->text().trimmed().toStdString();
+    settings_.twitchClientSecret = clientSecret_->text().trimmed().toStdString();
     settings_.oauthRedirectUri = redirectUri_->text().trimmed().toStdString();
     settings_.commandTrigger = ws(command_->text());
     settings_.responseTemplate = ws(responseTemplate_->text());

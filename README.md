@@ -28,7 +28,7 @@ The old tray application and local HTTP API were removed. The plugin no longer o
 - CMake 3.24+.
 - Qt 6 with Widgets, Network, and WebSockets.
 - OBS/libobs development files available to CMake.
-- A Twitch application Client ID. Login uses Twitch Device Code Flow, so no client secret is required.
+- A Twitch application Client ID. If the Twitch app is configured as Public client type, no client secret is required. If it is Confidential, fill `Twitch Client Secret` in the plugin settings so token refresh can work.
 
 ## Install From Release
 
@@ -59,7 +59,7 @@ The plugin module is `kamyshtracker.dll`.
 
 1. Select and authorize Twitch as the current OBS streaming service.
 2. Open `Tools -> KamyshTracker`.
-3. Keep the default Twitch Client ID or replace it with your own application ID.
+3. Keep the default Twitch Client ID or replace it with your own application ID. If your Twitch app is Confidential, also fill `Twitch Client Secret`.
 4. Click `Login`; your browser opens Twitch activation, then authorize the same Twitch account that OBS uses.
 5. Configure the command and response templates.
 
@@ -82,4 +82,4 @@ If OBS is not configured for Twitch, KamyshTracker will not answer chat commands
 
 OBS does not expose a supported public API for third-party plugins to reuse the Twitch OAuth token from the OBS login. KamyshTracker therefore performs its own OAuth login and treats OBS account matching as a safety gate.
 
-Tokens are stored in the current OBS profile configuration file `kamyshtracker.ini`. Access and refresh tokens are not shown in the UI and should not be shared.
+Tokens and the optional Twitch Client Secret are stored in the current OBS profile configuration file `kamyshtracker.ini`. Access tokens, refresh tokens, and client secrets should not be shared.

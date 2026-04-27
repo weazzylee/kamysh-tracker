@@ -28,7 +28,7 @@ KamyshTracker - нативный плагин для OBS Studio под Windows. 
 - CMake 3.24+.
 - Qt 6 с модулями Widgets, Network и WebSockets.
 - OBS/libobs development files, доступные для CMake.
-- Twitch application Client ID. Логин использует Twitch Device Code Flow, поэтому client secret не нужен.
+- Twitch application Client ID. Если Twitch app настроен как Public client type, client secret не нужен. Если app настроен как Confidential, заполните `Twitch Client Secret` в настройках плагина, чтобы token refresh работал.
 
 ## Установка из готового release
 
@@ -59,7 +59,7 @@ cmake --install build --config Release --prefix "C:\Program Files\obs-studio"
 
 1. Выберите и авторизуйте Twitch как текущий streaming service в OBS.
 2. Откройте `Tools -> KamyshTracker`.
-3. Оставьте Twitch Client ID по умолчанию или замените его на ID своего приложения.
+3. Оставьте Twitch Client ID по умолчанию или замените его на ID своего приложения. Если ваше Twitch app настроено как Confidential, также заполните `Twitch Client Secret`.
 4. Нажмите `Login`; браузер откроет Twitch activation, затем авторизуйте тот же Twitch-аккаунт, который используется в OBS.
 5. Настройте команду и шаблоны ответа.
 
@@ -82,4 +82,4 @@ cmake --install build --config Release --prefix "C:\Program Files\obs-studio"
 
 OBS не предоставляет поддерживаемый публичный API, через который сторонний плагин мог бы безопасно использовать Twitch OAuth-токен OBS. Поэтому KamyshTracker делает отдельную OAuth-авторизацию и использует совпадение аккаунта OBS как обязательную проверку безопасности.
 
-Токены хранятся в конфиге текущего OBS-профиля `kamyshtracker.ini`. Access и refresh token не показываются в UI, их нельзя публиковать или передавать другим людям.
+Токены и optional Twitch Client Secret хранятся в конфиге текущего OBS-профиля `kamyshtracker.ini`. Access token, refresh token и client secret нельзя публиковать или передавать другим людям.

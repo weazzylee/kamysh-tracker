@@ -35,6 +35,7 @@ private:
     QCheckBox *enabled_ = nullptr;
     QCheckBox *requireStreaming_ = nullptr;
     QLineEdit *clientId_ = nullptr;
+    QLineEdit *clientSecret_ = nullptr;
     QLineEdit *redirectUri_ = nullptr;
     QLineEdit *command_ = nullptr;
     QLineEdit *responseTemplate_ = nullptr;

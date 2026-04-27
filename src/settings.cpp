@@ -62,6 +62,7 @@ PluginSettings SettingsStore::load() const
     config_set_default_string(config, "general", "response_template", narrow(settings.responseTemplate).c_str());
     config_set_default_string(config, "general", "not_playing_template", narrow(settings.notPlayingTemplate).c_str());
     config_set_default_string(config, "twitch", "client_id", settings.twitchClientId.c_str());
+    config_set_default_string(config, "twitch", "client_secret", settings.twitchClientSecret.c_str());
     config_set_default_string(config, "twitch", "redirect_uri", settings.oauthRedirectUri.c_str());
 
     settings.enabled = config_get_bool(config, "general", "enabled");
@@ -75,6 +76,7 @@ PluginSettings SettingsStore::load() const
     settings.twitchClientId = safeString(config_get_string(config, "twitch", "client_id"));
     if (settings.twitchClientId.empty())
         settings.twitchClientId = PluginSettings{}.twitchClientId;
+    settings.twitchClientSecret = safeString(config_get_string(config, "twitch", "client_secret"));
     settings.oauthRedirectUri = safeString(config_get_string(config, "twitch", "redirect_uri"));
     if (!isUsableRedirectUri(settings.oauthRedirectUri))
         settings.oauthRedirectUri = PluginSettings{}.oauthRedirectUri;
@@ -101,6 +103,7 @@ void SettingsStore::save(const PluginSettings &settings) const
     config_set_string(config, "general", "response_template", narrow(settings.responseTemplate).c_str());
     config_set_string(config, "general", "not_playing_template", narrow(settings.notPlayingTemplate).c_str());
     config_set_string(config, "twitch", "client_id", settings.twitchClientId.c_str());
+    config_set_string(config, "twitch", "client_secret", settings.twitchClientSecret.c_str());
     config_set_string(config, "twitch", "redirect_uri", settings.oauthRedirectUri.c_str());
     config_set_string(config, "twitch", "access_token", settings.twitchAccessToken.c_str());
     config_set_string(config, "twitch", "refresh_token", settings.twitchRefreshToken.c_str());

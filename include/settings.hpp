@@ -12,6 +12,7 @@ struct PluginSettings {
     std::wstring responseTemplate = L"Сейчас играет: {artist} - {title}";
     std::wstring notPlayingTemplate = L"Сейчас ничего не играет";
     std::string twitchClientId = "gvtl52d300qthfi0ryc4n7f5s7ocz1";
+    std::string twitchClientSecret;
     std::string oauthRedirectUri = "http://localhost:17635/callback";
     std::string twitchAccessToken;
     std::string twitchRefreshToken;

@@ -297,6 +297,7 @@ void TwitchClient::stop()
 bool TwitchClient::loginWithBrowser(const PluginSettings &inputSettings, PluginSettings &settings, std::string &error)
 {
     const auto &clientId = inputSettings.twitchClientId;
+    const auto &clientSecret = inputSettings.twitchClientSecret;
     if (clientId.empty()) {
         error = "Twitch Client ID is required";
         return false;
@@ -350,6 +351,8 @@ bool TwitchClient::loginWithBrowser(const PluginSettings &inputSettings, PluginS
     while (std::chrono::steady_clock::now() < deadline) {
         QUrlQuery tokenBody;
         tokenBody.addQueryItem("client_id", QString::fromStdString(clientId));
+        if (!clientSecret.empty())
+            tokenBody.addQueryItem("client_secret", QString::fromStdString(clientSecret));
         tokenBody.addQueryItem("device_code", deviceCode);
         tokenBody.addQueryItem("grant_type", "urn:ietf:params:oauth:grant-type:device_code");
 
@@ -387,6 +390,7 @@ bool TwitchClient::loginWithBrowser(const PluginSettings &inputSettings, PluginS
 
     const auto tokenJson = QJsonDocument::fromJson(tokenResponse).object();
     settings.twitchClientId = clientId;
+    settings.twitchClientSecret = clientSecret;
     settings.twitchAccessToken = tokenJson.value("access_token").toString().toStdString();
     settings.twitchRefreshToken = tokenJson.value("refresh_token").toString().toStdString();
 
@@ -598,6 +602,8 @@ bool TwitchClient::ensureToken(std::string &error)
     refreshBody.addQueryItem("grant_type", "refresh_token");
     refreshBody.addQueryItem("refresh_token", QString::fromStdString(snapshot.twitchRefreshToken));
     refreshBody.addQueryItem("client_id", QString::fromStdString(snapshot.twitchClientId));
+    if (!snapshot.twitchClientSecret.empty())
+        refreshBody.addQueryItem("client_secret", QString::fromStdString(snapshot.twitchClientSecret));
 
     int status = 0;
     QString networkError;
@@ -610,6 +616,13 @@ bool TwitchClient::ensureToken(std::string &error)
         &networkError);
 
     if (status < 200 || status >= 300) {
+        const auto responseText = QString::fromUtf8(tokenResponse);
+        if (snapshot.twitchClientSecret.empty() && responseText.contains("missing client secret", Qt::CaseInsensitive)) {
+            error = "Token refresh failed: Twitch Client Secret is required for this Client ID. "
+                "Open Tools -> KamyshTracker, fill Twitch Client Secret, save, and login again; "
+                "or switch the Twitch application to Public client type.";
+            return false;
+        }
         error = ("Token refresh failed: " + networkError + " " + QString::fromUtf8(tokenResponse)).toStdString();
         return false;
     }
