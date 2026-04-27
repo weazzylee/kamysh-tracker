@@ -21,7 +21,7 @@ The old tray application and local HTTP API were removed. The plugin no longer o
 ## Requirements
 
 - Windows 10/11 x64.
-- OBS Studio 30+.
+- OBS Studio 30.0.0+.
 - For the prebuilt release package: no Visual Studio, CMake, Qt, or OBS development files are required.
 - For building from source:
 - Visual Studio 2022 Build Tools with MSVC.

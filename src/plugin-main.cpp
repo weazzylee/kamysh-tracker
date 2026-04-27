@@ -10,6 +10,8 @@
 #include <QObject>
 #include <QPointer>
 #include <QWidget>
+#include <array>
+#include <cstdio>
 #include <memory>
 
 OBS_DECLARE_MODULE()
@@ -21,6 +23,25 @@ std::unique_ptr<kamyshtracker::SettingsStore> settingsStore;
 std::unique_ptr<kamyshtracker::MediaMonitor> mediaMonitor;
 std::unique_ptr<kamyshtracker::TwitchClient> twitchClient;
 QPointer<kamyshtracker::SettingsDialog> settingsDialog;
+
+constexpr std::array<int, 3> minimumObsVersion = {30, 0, 0};
+
+std::array<int, 3> parseVersion(const char *version)
+{
+    std::array<int, 3> parsed = {0, 0, 0};
+    if (!version)
+        return parsed;
+
+    std::sscanf(version, "%d.%d.%d", &parsed[0], &parsed[1], &parsed[2]);
+    return parsed;
+}
+
+bool isAtLeast(std::array<int, 3> version, std::array<int, 3> minimum)
+{
+    return version[0] > minimum[0] ||
+        (version[0] == minimum[0] && version[1] > minimum[1]) ||
+        (version[0] == minimum[0] && version[1] == minimum[1] && version[2] >= minimum[2]);
+}
 
 void openSettings(void *)
 {
@@ -54,6 +75,14 @@ void openSettings(void *)
 
 bool obs_module_load()
 {
+    const char *obsVersion = obs_get_version_string();
+    if (!isAtLeast(parseVersion(obsVersion), minimumObsVersion)) {
+        blog(LOG_ERROR,
+            "[kamyshtracker] OBS Studio 30.0.0 or newer is required; current OBS version is %s",
+            obsVersion ? obsVersion : "unknown");
+        return false;
+    }
+
     blog(LOG_INFO, "[kamyshtracker] loading native OBS plugin");
 
     settingsStore = std::make_unique<kamyshtracker::SettingsStore>();

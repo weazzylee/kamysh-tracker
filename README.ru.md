@@ -21,7 +21,7 @@ KamyshTracker - нативный плагин для OBS Studio под Windows. 
 ## Требования
 
 - Windows 10/11 x64.
-- OBS Studio 30+.
+- OBS Studio 30.0.0+.
 - Для установки готового release не нужны Visual Studio, CMake, Qt и OBS development files.
 - Для сборки из исходников:
 - Visual Studio 2022 Build Tools с MSVC.

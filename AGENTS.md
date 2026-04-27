@@ -5,7 +5,7 @@ KamyshTracker is a native Windows OBS Studio plugin that reads the current media
 - C++20 (`CMAKE_CXX_STANDARD 20`, extensions off).
 - CMake 3.24+ (`cmake_minimum_required(VERSION 3.24)`).
 - Qt 6 with Widgets, Network, and WebSockets (`find_package(Qt6 REQUIRED COMPONENTS Widgets Network WebSockets)`).
-- OBS/libobs and OBS Frontend API; README requires OBS Studio 30+, while CMake fallback paths reference OBS Studio 32.1.2 headers/import libraries under `.deps/`.
+- OBS/libobs and OBS Frontend API; README requires OBS Studio 30.0.0+, while CMake fallback paths reference OBS Studio 30.0.0 headers/import libraries under `.deps/`.
 - Windows APIs/libraries: Windows SMTC via C++/WinRT, `windowsapp`, `winhttp`, `ws2_32`, `crypt32`, and `bcrypt`.
 
 # Core Commands
@@ -36,6 +36,8 @@ KamyshTracker is a native Windows OBS Studio plugin that reads the current media
 # Agent Guardrails
 - Do not commit or edit generated/local artifacts in `.deps/`, `build/`, `package/`, or `kamyshtracker-obs-plugin.zip`.
 - Do not package `Qt6*.dll`, `bin/64bit/tls/*`, or other OBS/Qt runtime DLLs; the plugin must use the Qt runtime bundled with OBS.
+- Do not raise the OBS SDK baseline above 30.0.0 unless the user explicitly asks for it.
+- Keep CMake compatible with both OBS frontend API header layouts: `UI/obs-frontend-api` for OBS 30/31 and `frontend/api` for newer OBS.
 - Do not reintroduce constant 5-second SMTC polling that creates a new `GlobalSystemMediaTransportControlsSessionManager` every tick.
 - Do not send Helix chat messages directly from `QWebSocket::textMessageReceived`; keep the reply queue/worker model.
 - Do not start the SMTC worker on OBS startup unless Twitch is active or the settings UI needs media status.

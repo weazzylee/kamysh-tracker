@@ -15,10 +15,10 @@ find_package(Qt6 REQUIRED COMPONENTS Widgets Network WebSockets)
 find_package(libobs QUIET)
 find_package(obs-frontend-api QUIET)
 
-if(NOT TARGET OBS::libobs)
-    set(OBS_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.deps/obs-studio-32.1.2" CACHE PATH "OBS source directory for headers")
-    set(OBS_IMPORT_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.deps/obs-import-libs" CACHE PATH "OBS generated import libraries")
+set(OBS_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.deps/obs-studio-30.0.0" CACHE PATH "OBS source directory for headers")
+set(OBS_IMPORT_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.deps/obs-import-libs" CACHE PATH "OBS generated import libraries")
 
+if(NOT TARGET OBS::libobs)
     add_library(OBS::libobs UNKNOWN IMPORTED)
     set_target_properties(OBS::libobs PROPERTIES
         IMPORTED_LOCATION "${OBS_IMPORT_LIB_DIR}/obs.lib"
@@ -27,13 +27,21 @@ if(NOT TARGET OBS::libobs)
 endif()
 
 if(NOT TARGET OBS::obs-frontend-api)
-    set(OBS_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.deps/obs-studio-32.1.2" CACHE PATH "OBS source directory for headers")
-    set(OBS_IMPORT_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.deps/obs-import-libs" CACHE PATH "OBS generated import libraries")
+    set(OBS_FRONTEND_API_INCLUDE_DIR "")
+    if(EXISTS "${OBS_SOURCE_DIR}/UI/obs-frontend-api/obs-frontend-api.h")
+        set(OBS_FRONTEND_API_INCLUDE_DIR "${OBS_SOURCE_DIR}/UI/obs-frontend-api")
+    elseif(EXISTS "${OBS_SOURCE_DIR}/frontend/api/obs-frontend-api.h")
+        set(OBS_FRONTEND_API_INCLUDE_DIR "${OBS_SOURCE_DIR}/frontend/api")
+    else()
+        message(FATAL_ERROR
+            "Could not find obs-frontend-api.h. Checked "
+            "${OBS_SOURCE_DIR}/UI/obs-frontend-api and ${OBS_SOURCE_DIR}/frontend/api")
+    endif()
 
     add_library(OBS::obs-frontend-api UNKNOWN IMPORTED)
     set_target_properties(OBS::obs-frontend-api PROPERTIES
         IMPORTED_LOCATION "${OBS_IMPORT_LIB_DIR}/obs-frontend-api.lib"
-        INTERFACE_INCLUDE_DIRECTORIES "${OBS_SOURCE_DIR}/frontend/api"
+        INTERFACE_INCLUDE_DIRECTORIES "${OBS_FRONTEND_API_INCLUDE_DIR}"
     )
 endif()
 
