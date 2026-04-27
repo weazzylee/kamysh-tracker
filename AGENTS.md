@@ -1,5 +1,5 @@
 # Project Overview
-KamyshTracker is a native Windows OBS Studio plugin that reads the current media session through Windows System Media Transport Controls (SMTC) and answers configured Twitch chat commands with the current track via Twitch EventSub WebSocket and Helix chat APIs.
+KamyshTracker is a native Windows OBS Studio plugin that reads the current media session through Windows System Media Transport Controls (SMTC) and answers configured Twitch chat commands with the current track via Twitch EventSub WebSocket and Helix chat APIs. The SMTC monitor is event-driven with a rare fallback refresh, and Twitch chat replies are sent through a dedicated reply queue/worker so EventSub callbacks stay fast.
 
 # Tech Stack
 - C++20 (`CMAKE_CXX_STANDARD 20`, extensions off).
@@ -12,7 +12,7 @@ KamyshTracker is a native Windows OBS Studio plugin that reads the current media
 - Configure: `cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_PREFIX_PATH="C:\Path\To\Qt;C:\Path\To\OBS"`
 - Build: `cmake --build build --config Release`
 - Install: `cmake --install build --config Release --prefix "C:\Program Files\obs-studio"`
-- Package: `cmake --install build --config Release --prefix package`
+- Package: `cmake --install build --config Release --prefix package`; the final zip should contain only `obs-plugins/64bit/kamyshtracker.dll` and `data/obs-plugins/kamyshtracker/**`.
 - Test: `> TODO: No test command or test target is defined in this repo.`
 - Lint: `> TODO: No lint command or formatter configuration is defined in this repo.`
 
@@ -23,7 +23,7 @@ KamyshTracker is a native Windows OBS Studio plugin that reads the current media
 - `cmake/obs-generated/`: generated OBS configuration header used when local OBS package targets are unavailable.
 - `.github/workflows/`: manual GitHub Actions release workflow.
 - `Resources/`: Windows icon resource assets.
-- `.deps/`, `build/`, `package/`: local dependency, build, and packaging artifacts; these are ignored and should remain untracked.
+- `.deps/`, `build/`, `package/`, `kamyshtracker-obs-plugin.zip`: local dependency, build, and packaging artifacts; these are ignored and should remain untracked.
 
 # Coding Conventions
 - Keep code inside the `kamyshtracker` namespace.
@@ -35,6 +35,10 @@ KamyshTracker is a native Windows OBS Studio plugin that reads the current media
 
 # Agent Guardrails
 - Do not commit or edit generated/local artifacts in `.deps/`, `build/`, `package/`, or `kamyshtracker-obs-plugin.zip`.
+- Do not package `Qt6*.dll`, `bin/64bit/tls/*`, or other OBS/Qt runtime DLLs; the plugin must use the Qt runtime bundled with OBS.
+- Do not reintroduce constant 5-second SMTC polling that creates a new `GlobalSystemMediaTransportControlsSessionManager` every tick.
+- Do not send Helix chat messages directly from `QWebSocket::textMessageReceived`; keep the reply queue/worker model.
+- Do not start the SMTC worker on OBS startup unless Twitch is active or the settings UI needs media status.
 - Do not expose Twitch access tokens, refresh tokens, client secrets, or user-specific `kamyshtracker.ini` contents.
 - Do not reintroduce the removed tray app, local HTTP API, `127.0.0.1:5050`, `/json`, `/widget`, or OBS Browser Source workflow.
 - Do not change OAuth/account-matching safety behavior without preserving the requirement that OBS Twitch account and OAuth account are checked when OBS exposes the login.
