@@ -6,6 +6,7 @@
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <winhttp.h>
 
 #include <QCryptographicHash>
 #include <QCoreApplication>
@@ -23,12 +24,13 @@
 #include <QGuiApplication>
 #include <QUrl>
 #include <QUrlQuery>
-#include <QWebSocket>
 
 #include <algorithm>
 #include <cwctype>
 #include <future>
+#include <memory>
 #include <thread>
+#include <vector>
 
 namespace kamyshtracker {
 namespace {
@@ -42,6 +44,22 @@ constexpr auto eventSubSocketUrl = "wss://eventsub.wss.twitch.tv/ws";
 constexpr auto chatMessagesUrl = "https://api.twitch.tv/helix/chat/messages";
 constexpr auto tokenValidationTtl = std::chrono::minutes(10);
 constexpr auto obsAccountCacheTtl = std::chrono::seconds(30);
+
+struct InternetHandleDeleter {
+    void operator()(void *handle) const
+    {
+        if (handle)
+            WinHttpCloseHandle(static_cast<HINTERNET>(handle));
+    }
+};
+
+using InternetHandle = std::unique_ptr<void, InternetHandleDeleter>;
+
+struct WebSocketConnection {
+    InternetHandle session;
+    InternetHandle connect;
+    InternetHandle socket;
+};
 
 struct OAuthCallbackResult {
     QString code;
@@ -255,6 +273,48 @@ bool matchesCommandTrigger(const std::wstring &message, const std::wstring &trig
     return false;
 }
 
+void interruptibleSleep(const std::atomic_bool &running, std::chrono::seconds duration)
+{
+    const auto deadline = std::chrono::steady_clock::now() + duration;
+    while (running && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+}
+
+std::string winHttpError(const char *operation)
+{
+    return std::string(operation) + " failed: " + std::to_string(GetLastError());
+}
+
+bool parseWebSocketUrl(const std::string &url, std::wstring &host, INTERNET_PORT &port, std::wstring &path)
+{
+    std::string httpUrl = url;
+    if (httpUrl.rfind("wss://", 0) == 0)
+        httpUrl.replace(0, 6, "https://");
+    else if (httpUrl.rfind("ws://", 0) == 0)
+        httpUrl.replace(0, 5, "http://");
+
+    const auto wideUrl = QString::fromStdString(httpUrl).toStdWString();
+    URL_COMPONENTS components{};
+    components.dwStructSize = sizeof(components);
+    components.dwSchemeLength = static_cast<DWORD>(-1);
+    components.dwHostNameLength = static_cast<DWORD>(-1);
+    components.dwUrlPathLength = static_cast<DWORD>(-1);
+    components.dwExtraInfoLength = static_cast<DWORD>(-1);
+
+    if (!WinHttpCrackUrl(wideUrl.c_str(), static_cast<DWORD>(wideUrl.size()), 0, &components))
+        return false;
+    if (components.nScheme != INTERNET_SCHEME_HTTPS && components.nScheme != INTERNET_SCHEME_HTTP)
+        return false;
+
+    host.assign(components.lpszHostName, components.dwHostNameLength);
+    path.assign(components.lpszUrlPath, components.dwUrlPathLength);
+    path.append(components.lpszExtraInfo, components.dwExtraInfoLength);
+    if (path.empty())
+        path = L"/";
+    port = components.nPort;
+    return !host.empty();
+}
+
 }
 
 TwitchClient::TwitchClient() = default;
@@ -295,6 +355,7 @@ void TwitchClient::stop()
     if (!running_.exchange(false))
         return;
 
+    closeActiveEventSubSocket();
     replyWake_.notify_all();
     if (worker_.joinable())
         worker_.join();
@@ -518,6 +579,7 @@ void TwitchClient::replyLoop()
 
 void TwitchClient::eventSubLoop()
 {
+    std::string socketUrl = eventSubSocketUrl;
     while (running_) {
         PluginSettings snapshot;
         {
@@ -530,7 +592,7 @@ void TwitchClient::eventSubLoop()
                 std::lock_guard lock(mutex_);
                 status_ = "Not authorized";
             }
-            std::this_thread::sleep_for(std::chrono::seconds(2));
+            interruptibleSleep(running_, std::chrono::seconds(2));
             continue;
         }
 
@@ -538,22 +600,41 @@ void TwitchClient::eventSubLoop()
         if (!ensureToken(error)) {
             std::lock_guard lock(mutex_);
             status_ = "Token error: " + error;
-            std::this_thread::sleep_for(std::chrono::seconds(10));
+            interruptibleSleep(running_, std::chrono::seconds(10));
             continue;
         }
 
-        QEventLoop loop;
-        QWebSocket socket;
         QString sessionId;
         bool subscribed = false;
+        bool reconnecting = false;
+        std::string nextSocketUrl;
+        void *rawSocket = nullptr;
 
-        QObject::connect(&socket, &QWebSocket::connected, [&] {
+        if (!connectEventSubSocket(socketUrl, rawSocket, error)) {
             std::lock_guard lock(mutex_);
-            status_ = "EventSub connected";
-        });
+            status_ = "WebSocket error: " + error;
+            interruptibleSleep(running_, std::chrono::seconds(10));
+            continue;
+        }
 
-        QObject::connect(&socket, &QWebSocket::textMessageReceived, [&](const QString &message) {
-            const auto doc = QJsonDocument::fromJson(message.toUtf8());
+        std::unique_ptr<WebSocketConnection> socket(static_cast<WebSocketConnection *>(rawSocket));
+        {
+            std::lock_guard lock(mutex_);
+            activeEventSubSocket_ = socket->socket.get();
+            status_ = "EventSub connected";
+        }
+
+        while (running_) {
+            std::string message;
+            if (!receiveEventSubMessage(socket.get(), message, error)) {
+                if (running_) {
+                    std::lock_guard lock(mutex_);
+                    status_ = "WebSocket error: " + error;
+                }
+                break;
+            }
+
+            const auto doc = QJsonDocument::fromJson(QByteArray::fromStdString(message));
             const auto root = doc.object();
             const auto metadata = root.value("metadata").toObject();
             const auto type = metadata.value("message_type").toString();
@@ -572,33 +653,174 @@ void TwitchClient::eventSubLoop()
                 handleChatText(chatter, text);
             } else if (type == "session_reconnect") {
                 const auto reconnectUrl = payload.value("session").toObject().value("reconnect_url").toString();
-                socket.close();
-                socket.open(QUrl(reconnectUrl));
+                if (!reconnectUrl.isEmpty()) {
+                    reconnecting = true;
+                    nextSocketUrl = reconnectUrl.toStdString();
+                    break;
+                }
             }
-        });
+        }
 
-        QObject::connect(&socket, &QWebSocket::disconnected, &loop, &QEventLoop::quit);
-        QObject::connect(&socket, &QWebSocket::errorOccurred, [&](QAbstractSocket::SocketError) {
+        {
             std::lock_guard lock(mutex_);
-            status_ = "WebSocket error: " + socket.errorString().toStdString();
-            loop.quit();
-        });
+            if (activeEventSubSocket_ == socket->socket.get())
+                activeEventSubSocket_ = nullptr;
+        }
+        WinHttpWebSocketClose(static_cast<HINTERNET>(socket->socket.get()), WINHTTP_WEB_SOCKET_SUCCESS_CLOSE_STATUS, nullptr, 0);
 
-        socket.open(QUrl(eventSubSocketUrl));
-        QTimer watchdog;
-        QObject::connect(&watchdog, &QTimer::timeout, [&] {
-            if (!running_) {
-                socket.close();
-                loop.quit();
-            }
-        });
-        watchdog.start(1000);
-        loop.exec();
-        socket.close();
+        if (reconnecting) {
+            socketUrl = nextSocketUrl;
+            continue;
+        }
 
+        socketUrl = eventSubSocketUrl;
         if (running_)
-            std::this_thread::sleep_for(std::chrono::seconds(subscribed ? 2 : 10));
+            interruptibleSleep(running_, std::chrono::seconds(subscribed ? 2 : 10));
     }
+}
+
+bool TwitchClient::connectEventSubSocket(const std::string &url, void *&socket, std::string &error)
+{
+    socket = nullptr;
+
+    std::wstring host;
+    INTERNET_PORT port = INTERNET_DEFAULT_HTTPS_PORT;
+    std::wstring path;
+    if (!parseWebSocketUrl(url, host, port, path)) {
+        error = "Invalid EventSub WebSocket URL";
+        return false;
+    }
+
+    InternetHandle session(WinHttpOpen(
+        L"KamyshTracker/2.0",
+        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+        WINHTTP_NO_PROXY_NAME,
+        WINHTTP_NO_PROXY_BYPASS,
+        0));
+    if (!session) {
+        error = winHttpError("WinHttpOpen");
+        return false;
+    }
+
+    InternetHandle connect(WinHttpConnect(static_cast<HINTERNET>(session.get()), host.c_str(), port, 0));
+    if (!connect) {
+        error = winHttpError("WinHttpConnect");
+        return false;
+    }
+
+    InternetHandle request(WinHttpOpenRequest(
+        static_cast<HINTERNET>(connect.get()),
+        L"GET",
+        path.c_str(),
+        nullptr,
+        WINHTTP_NO_REFERER,
+        WINHTTP_DEFAULT_ACCEPT_TYPES,
+        WINHTTP_FLAG_SECURE));
+    if (!request) {
+        error = winHttpError("WinHttpOpenRequest");
+        return false;
+    }
+
+    if (!WinHttpSetOption(static_cast<HINTERNET>(request.get()), WINHTTP_OPTION_UPGRADE_TO_WEB_SOCKET, nullptr, 0)) {
+        error = winHttpError("WinHttpSetOption");
+        return false;
+    }
+
+    if (!WinHttpSendRequest(
+            static_cast<HINTERNET>(request.get()),
+            WINHTTP_NO_ADDITIONAL_HEADERS,
+            0,
+            WINHTTP_NO_REQUEST_DATA,
+            0,
+            0,
+            0) ||
+        !WinHttpReceiveResponse(static_cast<HINTERNET>(request.get()), nullptr)) {
+        error = winHttpError("WinHttpReceiveResponse");
+        return false;
+    }
+
+    DWORD statusCode = 0;
+    DWORD statusSize = sizeof(statusCode);
+    WinHttpQueryHeaders(
+        static_cast<HINTERNET>(request.get()),
+        WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+        WINHTTP_HEADER_NAME_BY_INDEX,
+        &statusCode,
+        &statusSize,
+        WINHTTP_NO_HEADER_INDEX);
+    if (statusCode != 101) {
+        error = "EventSub WebSocket upgrade failed with HTTP " + std::to_string(statusCode);
+        return false;
+    }
+
+    InternetHandle upgraded(WinHttpWebSocketCompleteUpgrade(static_cast<HINTERNET>(request.get()), 0));
+    if (!upgraded) {
+        error = winHttpError("WinHttpWebSocketCompleteUpgrade");
+        return false;
+    }
+    request.reset();
+
+    auto connection = std::make_unique<WebSocketConnection>();
+    connection->session = std::move(session);
+    connection->connect = std::move(connect);
+    connection->socket = std::move(upgraded);
+    socket = connection.release();
+    return true;
+}
+
+bool TwitchClient::receiveEventSubMessage(void *socket, std::string &message, std::string &error)
+{
+    auto *connection = static_cast<WebSocketConnection *>(socket);
+    if (!connection || !connection->socket) {
+        error = "EventSub WebSocket is not connected";
+        return false;
+    }
+
+    message.clear();
+    std::vector<char> buffer(16 * 1024);
+
+    while (running_) {
+        DWORD bytesRead = 0;
+        WINHTTP_WEB_SOCKET_BUFFER_TYPE bufferType{};
+        const DWORD result = WinHttpWebSocketReceive(
+            static_cast<HINTERNET>(connection->socket.get()),
+            buffer.data(),
+            static_cast<DWORD>(buffer.size()),
+            &bytesRead,
+            &bufferType);
+
+        if (result != ERROR_SUCCESS) {
+            error = "WinHttpWebSocketReceive failed: " + std::to_string(result);
+            return false;
+        }
+
+        if (bufferType == WINHTTP_WEB_SOCKET_CLOSE_BUFFER_TYPE) {
+            error = "EventSub WebSocket closed";
+            return false;
+        }
+
+        if (bufferType == WINHTTP_WEB_SOCKET_UTF8_FRAGMENT_BUFFER_TYPE ||
+            bufferType == WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE) {
+            message.append(buffer.data(), buffer.data() + bytesRead);
+            if (bufferType == WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE)
+                return true;
+        }
+    }
+
+    error = "EventSub WebSocket stopped";
+    return false;
+}
+
+void TwitchClient::closeActiveEventSubSocket()
+{
+    void *socket = nullptr;
+    {
+        std::lock_guard lock(mutex_);
+        socket = activeEventSubSocket_;
+    }
+
+    if (socket)
+        WinHttpWebSocketClose(static_cast<HINTERNET>(socket), WINHTTP_WEB_SOCKET_SUCCESS_CLOSE_STATUS, nullptr, 0);
 }
 
 bool TwitchClient::refreshUserInfo(PluginSettings &settings, std::string &error)

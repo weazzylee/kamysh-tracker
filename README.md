@@ -26,7 +26,7 @@ The old tray application and local HTTP API were removed. The plugin no longer o
 - For building from source:
 - Visual Studio 2022 Build Tools with MSVC.
 - CMake 3.24+.
-- Qt 6 with Widgets, Network, and WebSockets.
+- Qt 6 with Widgets and Network.
 - OBS/libobs development files available to CMake.
 - A Twitch application Client ID. If the Twitch app is configured as Public client type, no client secret is required. If it is Confidential, fill `Twitch Client Secret` in the plugin settings so token refresh can work.
 

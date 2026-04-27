@@ -54,6 +54,9 @@ private:
     bool sendChatMessage(const std::wstring &message, std::string &error);
     void enqueueReply(MediaState state);
     void handleChatText(const std::string &chatterLogin, const std::wstring &message);
+    bool connectEventSubSocket(const std::string &url, void *&socket, std::string &error);
+    bool receiveEventSubMessage(void *socket, std::string &message, std::string &error);
+    void closeActiveEventSubSocket();
     [[nodiscard]] std::wstring renderResponse(const MediaState &state) const;
 
     mutable std::mutex mutex_;
@@ -72,6 +75,7 @@ private:
     std::chrono::steady_clock::time_point tokenValidatedUntil_ = std::chrono::steady_clock::time_point::min();
     ObsTwitchAccount obsAccountCache_;
     std::chrono::steady_clock::time_point obsAccountCacheUntil_ = std::chrono::steady_clock::time_point::min();
+    void *activeEventSubSocket_ = nullptr;
 };
 
 ObsTwitchAccount readObsTwitchAccount();
