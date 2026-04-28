@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(kamyshtracker VERSION 2.0.4 LANGUAGES CXX)
+project(kamyshtracker VERSION 2.0.5 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -10,7 +10,7 @@ option(KAMYSHTRACKER_STANDALONE "Build without OBS plugin helper macros" OFF)
 
 set(CMAKE_AUTOMOC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Network)
+find_package(Qt6 REQUIRED COMPONENTS Widgets)
 
 find_package(libobs QUIET)
 find_package(obs-frontend-api QUIET)
@@ -66,7 +66,6 @@ target_link_libraries(kamyshtracker PRIVATE
     OBS::libobs
     OBS::obs-frontend-api
     Qt6::Widgets
-    Qt6::Network
     windowsapp
     winhttp
     ws2_32

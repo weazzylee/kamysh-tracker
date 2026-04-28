@@ -17,6 +17,8 @@ obj/
 *.tmp
 *.temp
 
+.kilo/
+
 # NuGet
 packages/
 .nuget/

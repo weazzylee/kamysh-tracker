@@ -4,7 +4,7 @@ KamyshTracker is a native Windows OBS Studio plugin that reads the current media
 # Tech Stack
 - C++20 (`CMAKE_CXX_STANDARD 20`, extensions off).
 - CMake 3.24+ (`cmake_minimum_required(VERSION 3.24)`).
-- Qt 6 with Widgets and Network (`find_package(Qt6 REQUIRED COMPONENTS Widgets Network)`).
+- Qt 6 with Widgets (`find_package(Qt6 REQUIRED COMPONENTS Widgets)`).
 - OBS/libobs and OBS Frontend API; README requires OBS Studio 30.0.0+, while CMake fallback paths reference OBS Studio 30.0.0 headers/import libraries under `.deps/`.
 - Windows APIs/libraries: Windows SMTC via C++/WinRT, `windowsapp`, `winhttp`, `ws2_32`, `crypt32`, and `bcrypt`.
 
@@ -13,6 +13,7 @@ KamyshTracker is a native Windows OBS Studio plugin that reads the current media
 - Build: `cmake --build build --config Release`
 - Install: `cmake --install build --config Release --prefix "C:\Program Files\obs-studio"`
 - Package: `cmake --install build --config Release --prefix package`; the final zip should contain only `obs-plugins/64bit/kamyshtracker.dll` and `data/obs-plugins/kamyshtracker/**`.
+- Verification archive: after code changes intended for manual testing, build Release, install to `package`, create/replace `kamyshtracker-obs-plugin.zip` from the package root, and verify the zip contents before reporting completion.
 - Test: `> TODO: No test command or test target is defined in this repo.`
 - Lint: `> TODO: No lint command or formatter configuration is defined in this repo.`
 

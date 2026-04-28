@@ -16,11 +16,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QNetworkAccessManager>
-#include <QNetworkReply>
-#include <QNetworkRequest>
 #include <QRandomGenerator>
-#include <QTimer>
 #include <QGuiApplication>
 #include <QUrl>
 #include <QUrlQuery>
@@ -175,6 +171,8 @@ QString randomVerifier()
     return base64Url(bytes);
 }
 
+std::string winHttpError(const char *operation);
+
 QByteArray httpRequest(
     const QString &method,
     const QUrl &url,
@@ -183,31 +181,121 @@ QByteArray httpRequest(
     int *statusCode,
     QString *error)
 {
-    QNetworkAccessManager manager;
-    QNetworkRequest request(url);
-    for (const auto &header : headers)
-        request.setRawHeader(header.first, header.second);
-
-    QNetworkReply *reply = nullptr;
-    if (method == "GET")
-        reply = manager.get(request);
-    else if (method == "POST")
-        reply = manager.post(request, body);
-    else
-        reply = manager.sendCustomRequest(request, method.toUtf8(), body);
-
-    QEventLoop loop;
-    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
-    QTimer::singleShot(30000, &loop, &QEventLoop::quit);
-    loop.exec();
-
-    const auto status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     if (statusCode)
-        *statusCode = status;
-    const auto response = reply->readAll();
-    if (reply->error() != QNetworkReply::NoError && error)
-        *error = reply->errorString();
-    reply->deleteLater();
+        *statusCode = 0;
+    if (error)
+        error->clear();
+
+    const auto scheme = url.scheme().toLower();
+    const bool secure = scheme == "https";
+    if (!secure && scheme != "http") {
+        if (error)
+            *error = "Unsupported URL scheme";
+        return {};
+    }
+
+    const auto host = url.host().toStdWString();
+    const auto path = QString(url.path().isEmpty() ? "/" : url.path()).toStdWString() +
+        (url.query().isEmpty() ? std::wstring{} : (L"?" + url.query(QUrl::FullyEncoded).toStdWString()));
+    const INTERNET_PORT port = url.port(secure ? INTERNET_DEFAULT_HTTPS_PORT : INTERNET_DEFAULT_HTTP_PORT);
+
+    InternetHandle session(WinHttpOpen(
+        L"KamyshTracker/2.0",
+        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+        WINHTTP_NO_PROXY_NAME,
+        WINHTTP_NO_PROXY_BYPASS,
+        0));
+    if (!session) {
+        if (error)
+            *error = QString::fromStdString(winHttpError("WinHttpOpen"));
+        return {};
+    }
+
+    DWORD timeout = 30000;
+    WinHttpSetOption(static_cast<HINTERNET>(session.get()), WINHTTP_OPTION_CONNECT_TIMEOUT, &timeout, sizeof(timeout));
+    WinHttpSetOption(static_cast<HINTERNET>(session.get()), WINHTTP_OPTION_SEND_TIMEOUT, &timeout, sizeof(timeout));
+    WinHttpSetOption(static_cast<HINTERNET>(session.get()), WINHTTP_OPTION_RECEIVE_TIMEOUT, &timeout, sizeof(timeout));
+
+    InternetHandle connect(WinHttpConnect(static_cast<HINTERNET>(session.get()), host.c_str(), port, 0));
+    if (!connect) {
+        if (error)
+            *error = QString::fromStdString(winHttpError("WinHttpConnect"));
+        return {};
+    }
+
+    InternetHandle request(WinHttpOpenRequest(
+        static_cast<HINTERNET>(connect.get()),
+        method.toStdWString().c_str(),
+        path.c_str(),
+        nullptr,
+        WINHTTP_NO_REFERER,
+        WINHTTP_DEFAULT_ACCEPT_TYPES,
+        secure ? WINHTTP_FLAG_SECURE : 0));
+    if (!request) {
+        if (error)
+            *error = QString::fromStdString(winHttpError("WinHttpOpenRequest"));
+        return {};
+    }
+
+    QString headerText;
+    for (const auto &header : headers)
+        headerText += QString::fromLatin1(header.first) + ": " + QString::fromLatin1(header.second) + "\r\n";
+    const auto wideHeaders = headerText.toStdWString();
+
+    if (!WinHttpSendRequest(
+            static_cast<HINTERNET>(request.get()),
+            wideHeaders.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : wideHeaders.c_str(),
+            static_cast<DWORD>(wideHeaders.empty() ? 0 : wideHeaders.size()),
+            body.isEmpty() ? WINHTTP_NO_REQUEST_DATA : const_cast<char *>(body.constData()),
+            static_cast<DWORD>(body.size()),
+            static_cast<DWORD>(body.size()),
+            0) ||
+        !WinHttpReceiveResponse(static_cast<HINTERNET>(request.get()), nullptr)) {
+        if (error)
+            *error = QString::fromStdString(winHttpError("WinHttpReceiveResponse"));
+        return {};
+    }
+
+    DWORD status = 0;
+    DWORD statusSize = sizeof(status);
+    if (WinHttpQueryHeaders(
+            static_cast<HINTERNET>(request.get()),
+            WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+            WINHTTP_HEADER_NAME_BY_INDEX,
+            &status,
+            &statusSize,
+            WINHTTP_NO_HEADER_INDEX) &&
+        statusCode) {
+        *statusCode = static_cast<int>(status);
+    }
+
+    QByteArray response;
+    while (true) {
+        DWORD available = 0;
+        if (!WinHttpQueryDataAvailable(static_cast<HINTERNET>(request.get()), &available)) {
+            if (error)
+                *error = QString::fromStdString(winHttpError("WinHttpQueryDataAvailable"));
+            break;
+        }
+        if (available == 0)
+            break;
+
+        const auto oldSize = response.size();
+        response.resize(oldSize + static_cast<int>(available));
+        DWORD read = 0;
+        if (!WinHttpReadData(
+                static_cast<HINTERNET>(request.get()),
+                response.data() + oldSize,
+                available,
+                &read)) {
+            if (error)
+                *error = QString::fromStdString(winHttpError("WinHttpReadData"));
+            response.resize(oldSize);
+            break;
+        }
+        response.resize(oldSize + static_cast<int>(read));
+    }
+
     return response;
 }
 
@@ -237,13 +325,30 @@ void replaceAll(std::wstring &text, const std::wstring &from, const std::wstring
     }
 }
 
-std::wstring trimCopy(std::wstring value)
+bool isCommandSeparator(wchar_t c)
 {
-    const auto first = value.find_first_not_of(L" \t\r\n");
-    if (first == std::wstring::npos)
+    return c == L' ' || c == L'\t' || c == L'\r' || c == L'\n' ||
+        c == L',' || c == L';' ||
+        c == L'\u00a0' || c == L'\u1680' || c == L'\u2028' || c == L'\u2029' ||
+        c == L'\u202f' || c == L'\u205f' || c == L'\u3000' ||
+        (c >= L'\u2000' && c <= L'\u200a');
+}
+
+std::wstring trimCommandText(const std::wstring &value)
+{
+    const auto first = std::find_if_not(value.begin(), value.end(), isCommandSeparator);
+    if (first == value.end())
         return {};
-    const auto last = value.find_last_not_of(L" \t\r\n");
-    return value.substr(first, last - first + 1);
+
+    const auto last = std::find_if_not(value.rbegin(), value.rend(), isCommandSeparator).base();
+    return std::wstring(first, last);
+}
+
+std::wstring firstCommandToken(const std::wstring &value)
+{
+    const auto trimmed = trimCommandText(value);
+    const auto separator = std::find_if(trimmed.begin(), trimmed.end(), isCommandSeparator);
+    return std::wstring(trimmed.begin(), separator);
 }
 
 std::wstring lowerCopy(std::wstring value)
@@ -256,13 +361,16 @@ std::wstring lowerCopy(std::wstring value)
 
 bool matchesCommandTrigger(const std::wstring &message, const std::wstring &triggers)
 {
-    const auto normalizedMessage = lowerCopy(trimCopy(message));
+    const auto normalizedMessage = lowerCopy(firstCommandToken(message));
+    if (normalizedMessage.empty())
+        return false;
+
     size_t pos = 0;
     while (pos < triggers.size()) {
-        while (pos < triggers.size() && ::iswspace(triggers[pos]))
+        while (pos < triggers.size() && isCommandSeparator(triggers[pos]))
             ++pos;
         const auto start = pos;
-        while (pos < triggers.size() && !::iswspace(triggers[pos]))
+        while (pos < triggers.size() && !isCommandSeparator(triggers[pos]))
             ++pos;
         if (start == pos)
             continue;
@@ -472,7 +580,14 @@ bool TwitchClient::loginWithBrowser(const PluginSettings &inputSettings, PluginS
     if (!refreshUserInfo(settings, error))
         return false;
 
-    configure(settings, mediaProvider_, statusCallback_);
+    MediaProvider provider;
+    StatusCallback statusCallback;
+    {
+        std::lock_guard lock(mutex_);
+        provider = mediaProvider_;
+        statusCallback = statusCallback_;
+    }
+    configure(settings, std::move(provider), std::move(statusCallback));
     return true;
 }
 
@@ -483,7 +598,14 @@ void TwitchClient::logout(PluginSettings &settings)
     settings.twitchLogin.clear();
     settings.twitchUserId.clear();
     settings.twitchBroadcasterId.clear();
-    configure(settings, mediaProvider_, statusCallback_);
+    MediaProvider provider;
+    StatusCallback statusCallback;
+    {
+        std::lock_guard lock(mutex_);
+        provider = mediaProvider_;
+        statusCallback = statusCallback_;
+    }
+    configure(settings, std::move(provider), std::move(statusCallback));
 }
 
 bool TwitchClient::sendTestMessage(std::string &error)
@@ -573,6 +695,9 @@ void TwitchClient::replyLoop()
         if (!ensureToken(error) || !sendChatMessage(renderResponse(state), error)) {
             std::lock_guard lock(mutex_);
             status_ = error;
+        } else {
+            std::lock_guard lock(mutex_);
+            lastReply_ = std::chrono::steady_clock::now();
         }
     }
 }
@@ -598,8 +723,10 @@ void TwitchClient::eventSubLoop()
 
         std::string error;
         if (!ensureToken(error)) {
-            std::lock_guard lock(mutex_);
-            status_ = "Token error: " + error;
+            {
+                std::lock_guard lock(mutex_);
+                status_ = "Token error: " + error;
+            }
             interruptibleSleep(running_, std::chrono::seconds(10));
             continue;
         }
@@ -611,8 +738,10 @@ void TwitchClient::eventSubLoop()
         void *rawSocket = nullptr;
 
         if (!connectEventSubSocket(socketUrl, rawSocket, error)) {
-            std::lock_guard lock(mutex_);
-            status_ = "WebSocket error: " + error;
+            {
+                std::lock_guard lock(mutex_);
+                status_ = "WebSocket error: " + error;
+            }
             interruptibleSleep(running_, std::chrono::seconds(10));
             continue;
         }
@@ -1042,6 +1171,8 @@ void TwitchClient::handleChatText(const std::string &, const std::wstring &messa
     MediaProvider provider;
     {
         std::lock_guard lock(mutex_);
+        if (!running_)
+            return;
         snapshot = settings_;
         provider = mediaProvider_;
     }
@@ -1055,11 +1186,13 @@ void TwitchClient::handleChatText(const std::string &, const std::wstring &messa
         if (lastReply_ != std::chrono::steady_clock::time_point::min() &&
             now - lastReply_ < std::chrono::seconds(snapshot.replyCooldownSeconds))
             return;
-        lastReply_ = now;
     }
 
-    const auto state = provider ? provider() : MediaState{};
-    enqueueReply(state);
+    try {
+        const auto state = provider ? provider() : MediaState{};
+        enqueueReply(state);
+    } catch (...) {
+    }
 }
 
 std::wstring TwitchClient::renderResponse(const MediaState &state) const

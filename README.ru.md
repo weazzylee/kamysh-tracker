@@ -26,7 +26,7 @@ KamyshTracker - нативный плагин для OBS Studio под Windows. 
 - Для сборки из исходников:
 - Visual Studio 2022 Build Tools с MSVC.
 - CMake 3.24+.
-- Qt 6 с модулями Widgets и Network.
+- Qt 6 с модулем Widgets.
 - OBS/libobs development files, доступные для CMake.
 - Twitch application Client ID. Если Twitch app настроен как Public client type, client secret не нужен. Если app настроен как Confidential, заполните `Twitch Client Secret` в настройках плагина, чтобы token refresh работал.
 

@@ -40,7 +40,6 @@ private:
     QLineEdit *command_ = nullptr;
     QLineEdit *responseTemplate_ = nullptr;
     QLineEdit *notPlayingTemplate_ = nullptr;
-    QSpinBox *cooldown_ = nullptr;
 };
 
 }

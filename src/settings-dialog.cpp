@@ -34,6 +34,12 @@ QString accountLabel(const ObsTwitchAccount &account)
     return QString::fromStdString(account.login);
 }
 
+TwitchClient::MediaProvider mediaProviderFor(MediaMonitor &monitor)
+{
+    auto *monitorPtr = &monitor;
+    return [monitorPtr] { return monitorPtr ? monitorPtr->current() : MediaState{}; };
+}
+
 }
 
 SettingsDialog::SettingsDialog(SettingsStore &store, MediaMonitor &monitor, TwitchClient &twitch, QWidget *parent)
@@ -63,10 +69,6 @@ SettingsDialog::SettingsDialog(SettingsStore &store, MediaMonitor &monitor, Twit
     command_ = new QLineEdit(this);
     responseTemplate_ = new QLineEdit(this);
     notPlayingTemplate_ = new QLineEdit(this);
-    cooldown_ = new QSpinBox(this);
-    cooldown_->setRange(0, 3600);
-    cooldown_->setSuffix(" sec");
-
     form->addRow("SMTC", smtcStatus_);
     form->addRow("OBS Twitch account", obsAccount_);
     form->addRow("OAuth account", oauthAccount_);
@@ -79,7 +81,6 @@ SettingsDialog::SettingsDialog(SettingsStore &store, MediaMonitor &monitor, Twit
     form->addRow("Commands", command_);
     form->addRow("Playing response", responseTemplate_);
     form->addRow("Not playing response", notPlayingTemplate_);
-    form->addRow("Cooldown", cooldown_);
     layout->addLayout(form);
 
     auto *actions = new QHBoxLayout();
@@ -107,7 +108,7 @@ SettingsDialog::SettingsDialog(SettingsStore &store, MediaMonitor &monitor, Twit
 
         store_.save(settings_);
         monitor_.start();
-        twitch_.configure(settings_, [&] { return monitor_.current(); }, nullptr);
+        twitch_.configure(settings_, mediaProviderFor(monitor_), nullptr);
         twitch_.start();
         refreshStatus();
     });
@@ -128,7 +129,7 @@ SettingsDialog::SettingsDialog(SettingsStore &store, MediaMonitor &monitor, Twit
         saveUi();
         store_.save(settings_);
         monitor_.start();
-        twitch_.configure(settings_, [&] { return monitor_.current(); }, nullptr);
+        twitch_.configure(settings_, mediaProviderFor(monitor_), nullptr);
         std::string error;
         if (!twitch_.sendTestMessage(error))
             QMessageBox::warning(this, "KamyshTracker", QString::fromStdString(error));
@@ -138,7 +139,7 @@ SettingsDialog::SettingsDialog(SettingsStore &store, MediaMonitor &monitor, Twit
     connect(buttons, &QDialogButtonBox::accepted, this, [this] {
         saveUi();
         store_.save(settings_);
-        twitch_.configure(settings_, [&] { return monitor_.current(); }, nullptr);
+        twitch_.configure(settings_, mediaProviderFor(monitor_), nullptr);
         if (settings_.enabled && !settings_.twitchAccessToken.empty()) {
             monitor_.start();
             twitch_.start();
@@ -167,7 +168,6 @@ void SettingsDialog::loadUi()
     command_->setText(qs(settings_.commandTrigger));
     responseTemplate_->setText(qs(settings_.responseTemplate));
     notPlayingTemplate_->setText(qs(settings_.notPlayingTemplate));
-    cooldown_->setValue(settings_.replyCooldownSeconds);
 }
 
 void SettingsDialog::saveUi()
@@ -180,7 +180,6 @@ void SettingsDialog::saveUi()
     settings_.commandTrigger = ws(command_->text());
     settings_.responseTemplate = ws(responseTemplate_->text());
     settings_.notPlayingTemplate = ws(notPlayingTemplate_->text());
-    settings_.replyCooldownSeconds = cooldown_->value();
 }
 
 void SettingsDialog::refreshStatus()

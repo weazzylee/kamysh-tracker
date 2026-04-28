@@ -35,6 +35,13 @@ bool isUsableRedirectUri(const std::string &value)
         url.path() != "/";
 }
 
+bool shouldUseDefaultCommandTrigger(const std::wstring &value)
+{
+    return value == L"!\u0442\u0440\u0435\u043a" ||
+        value == L"!\u0421\u201a\u0421\u0402\u0420\u00b5\u0420\u0454" ||
+        value == L"!\u0421\u201a\u0421\u0402\u0420\u00b5\u0420\u0454 !track !shazam !\u0421\u20ac\u0420\u00b0\u0420\u00b7\u0420\u00b0\u0420\u0458";
+}
+
 }
 
 SettingsStore::SettingsStore()
@@ -57,7 +64,7 @@ PluginSettings SettingsStore::load() const
 
     config_set_default_bool(config, "general", "enabled", settings.enabled);
     config_set_default_bool(config, "general", "require_streaming_active", settings.requireStreamingActive);
-    config_set_default_int(config, "general", "reply_cooldown_seconds", settings.replyCooldownSeconds);
+
     config_set_default_string(config, "general", "command_trigger", narrow(settings.commandTrigger).c_str());
     config_set_default_string(config, "general", "response_template", narrow(settings.responseTemplate).c_str());
     config_set_default_string(config, "general", "not_playing_template", narrow(settings.notPlayingTemplate).c_str());
@@ -67,9 +74,9 @@ PluginSettings SettingsStore::load() const
 
     settings.enabled = config_get_bool(config, "general", "enabled");
     settings.requireStreamingActive = config_get_bool(config, "general", "require_streaming_active");
-    settings.replyCooldownSeconds = static_cast<int>(config_get_int(config, "general", "reply_cooldown_seconds"));
+
     settings.commandTrigger = widen(config_get_string(config, "general", "command_trigger"));
-    if (settings.commandTrigger == L"!трек")
+    if (shouldUseDefaultCommandTrigger(settings.commandTrigger))
         settings.commandTrigger = PluginSettings{}.commandTrigger;
     settings.responseTemplate = widen(config_get_string(config, "general", "response_template"));
     settings.notPlayingTemplate = widen(config_get_string(config, "general", "not_playing_template"));
@@ -98,7 +105,7 @@ void SettingsStore::save(const PluginSettings &settings) const
 
     config_set_bool(config, "general", "enabled", settings.enabled);
     config_set_bool(config, "general", "require_streaming_active", settings.requireStreamingActive);
-    config_set_int(config, "general", "reply_cooldown_seconds", settings.replyCooldownSeconds);
+
     config_set_string(config, "general", "command_trigger", narrow(settings.commandTrigger).c_str());
     config_set_string(config, "general", "response_template", narrow(settings.responseTemplate).c_str());
     config_set_string(config, "general", "not_playing_template", narrow(settings.notPlayingTemplate).c_str());
